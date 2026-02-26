@@ -34,6 +34,7 @@
 struct MQTTConfig;
 
   #define DEBUG_SERIAL   0
+  #define DEBUG_TERMINAL 0
   #define USE_PSRAM      1
 
 //-----------------------------------------------------------------------LIBs----------------------------------------------------------------------
@@ -154,6 +155,9 @@ struct MQTTConfig;
 
   void otaUpdate();
   static bool otaDownloadAndApplyFromUrl(const String& url, String& errorOut);
+  static void serialMirrorPrint(const String& text, bool appendNewline);
+  static void serialMirrorPrintf(const char* fmt, ...);
+  static void executeSerialCommand(String input);
   void webServerReboot();
   void startLobbyServer();
   void serverStart();
@@ -1320,6 +1324,44 @@ unsigned long wifiConnectStartTime = 0;
       }
     }
     return encoded;
+  }
+
+  static constexpr size_t SERIAL_LOG_RING_SIZE = 200;
+  static String serialLogRing[SERIAL_LOG_RING_SIZE];
+  static size_t serialLogHead = 0;
+  static size_t serialLogCount = 0;
+
+  static void serialLogPushLine(const String& line, bool sendWs = true) {
+    String safe = line;
+    safe.replace("\r", "");
+    if (safe.length() > 280) safe = safe.substring(0, 280);
+    serialLogRing[serialLogHead] = safe;
+    serialLogHead = (serialLogHead + 1) % SERIAL_LOG_RING_SIZE;
+    if (serialLogCount < SERIAL_LOG_RING_SIZE) serialLogCount++;
+    (void)sendWs;
+  }
+
+  static void serialMirrorPrint(const String& text, bool appendNewline) {
+    if (text.length() == 0 && !appendNewline) return;
+    if (appendNewline) serialLogPushLine(text, true);
+    else serialLogPushLine(text, true);
+  }
+
+  static void serialMirrorPrintf(const char* fmt, ...) {
+    if (!fmt) return;
+    char buf[320];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    size_t len = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
+    String s;
+    s.reserve(len + 2);
+    s += buf;
+    s.replace("\r", "");
+    if (s.endsWith("\n")) s.remove(s.length() - 1);
+    serialLogPushLine(s, true);
   }
 
   static String httpsGet(const String& url, int* statusOut = nullptr) {
@@ -5093,6 +5135,7 @@ unsigned long wifiConnectStartTime = 0;
         // Send a single, batched snapshot instead of ~15 tiny frames
         sendWsInitSnapshot(client);
         broadcastGpioConfig(client);
+        // Serial terminal history is loaded via /serial/logs to keep websocket traffic clean.
 
         // (Optional) If you want to immediately broadcast beacon/emergency to all clients too:
         // wsCarInput.textAll(String("Beacon,") + (beaconOn ? 1 : 0));
@@ -6950,6 +6993,44 @@ unsigned long wifiConnectStartTime = 0;
       auto *resp = new AsyncJsonResponse();
       resp->getRoot()["current"] = FIRMWARE_VERSION;
       resp->setCode(200);
+      resp->setLength();
+      request->send(resp);
+    });
+
+    // ---------- /serial/logs (GET) ----------
+    server.on("/serial/logs", HTTP_GET, [](AsyncWebServerRequest *request){
+      auto* resp = new AsyncJsonResponse();
+      JsonObject root = resp->getRoot().to<JsonObject>();
+      JsonArray lines = root.createNestedArray("lines");
+      const size_t start = (serialLogHead + SERIAL_LOG_RING_SIZE - serialLogCount) % SERIAL_LOG_RING_SIZE;
+      for (size_t i = 0; i < serialLogCount; ++i) {
+        const size_t idx = (start + i) % SERIAL_LOG_RING_SIZE;
+        lines.add(serialLogRing[idx]);
+      }
+      root["count"] = (int)serialLogCount;
+      root["ok"] = true;
+      resp->setCode(200);
+      resp->setLength();
+      request->send(resp);
+    });
+
+    // ---------- /serial/command (POST|GET) ----------
+    server.on("/serial/command", HTTP_ANY, [](AsyncWebServerRequest *request){
+      String cmd;
+      if (request->hasParam("cmd", true)) cmd = request->getParam("cmd", true)->value();
+      else if (request->hasParam("cmd")) cmd = request->getParam("cmd")->value();
+
+      auto* resp = new AsyncJsonResponse();
+      JsonObject root = resp->getRoot().to<JsonObject>();
+      if (cmd.isEmpty()) {
+        root["ok"] = false;
+        root["error"] = "missing_cmd";
+        resp->setCode(400);
+      } else {
+        serialLogPushLine(String("> ") + cmd, true);
+        executeSerialCommand(cmd);
+        root["ok"] = true;
+      }
       resp->setLength();
       request->send(resp);
     });
@@ -9855,99 +9936,93 @@ unsigned long wifiConnectStartTime = 0;
     DBG_PRINTLN(" dockunpair          Clear saved dock pairing");
   }
 
-  void handleSerialCommands() {
-    if (Serial.available()) {
-      String input = "";
-      while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') break;
-        input += c;
-        delay(2);
-      }
-      input.trim();
+  static void executeSerialCommand(String input) {
+    input.trim();
+    if (input.length() == 0) return;
 
-      if (input.length() > 0) {
-        // Command: Play a WAV file by path (e.g., "P myfile.wav")
-        if (input.charAt(0) == 'P' && (input.length() > 1) && !isDigit(input.charAt(1))) {
-          String filename = input.substring(1);
-          filename.trim();
-          DBG_PRINTF("[SERIAL] Requested play: '%s'\n", filename.c_str());
-          if (!SD.exists(filename.c_str())) {
-            DBG_PRINTF("[ERROR] File not found on SD: '%s'\n", filename.c_str());
-          } else {
-            playWavFileOnSpeaker(filename.c_str());
-          }
-        }
-        // Command: Legacy motor control (F/B/L/R followed by number)
-        else if (input.length() > 1 &&
-                (input.charAt(0) == 'F' || input.charAt(0) == 'B' ||
-                  input.charAt(0) == 'L' || input.charAt(0) == 'R') &&
-                isDigit(input.charAt(1))) {
-          char cmd = input.charAt(0);
-          int value = input.substring(1).toInt();
-          if (cmd == 'F') controlMotorByDirection("Forward", value);
-          else if (cmd == 'B') controlMotorByDirection("Backward", value);
-          else if (cmd == 'L') controlMotorByDirection("Left", value);
-          else if (cmd == 'R') controlMotorByDirection("Right", value);
-          DBG_PRINTF("✅ Command: %c %d\n", cmd, value);
-        }
-        // Command: Plain string commands
-        else {
-          String cmd = input;
-          cmd.toLowerCase();
-
-          if (cmd == "help") {
-            printSerialHelp();
-          }
-          else if (cmd == "next") nextTrack();
-          else if (cmd == "heap" || cmd == "debug") {
-            printDebugInfo();
-          }
-          else if (cmd == "serverreboot" || cmd == "rebootserver") {
-              DBG_PRINTLN("[SERIAL] Triggering webServerReboot by command...");
-              webServerReboot();
-          }        
-          else if (cmd == "wifi" || cmd == "debug") {
-            printWifiDebugInfo();
-          }        
-          else if (cmd == "previous") prevTrack();
-          else if (cmd == "play") playCurrentTrack();
-          else if (cmd == "stop") {
-            stopAudio();
-            DBG_PRINTLN("[STOP]");
-          }
-          else if (cmd == "random") randomTrack();
-          else if (cmd == "nextfolder") nextFolder();
-          else if (cmd == "reset" || cmd == "reboot") resetESP();
-          else if (cmd == "dockadv on" || cmd == "adv on") {
-            dockDiscoveryEnabled = true;
-            dockPair.paired = false;       // allow discovery even if prefs still hold old pair
-            lastDockDiscoveryMs = 0;
-            saveDockPairingToPrefs();
-            DBG_PRINTLN("[DOCK] discovery enabled via serial");
-          }
-          else if (cmd == "dockadv off" || cmd == "adv off") {
-            dockDiscoveryEnabled = false;
-            saveDockPairingToPrefs();
-            DBG_PRINTLN("[DOCK] discovery disabled via serial");
-          }
-          else if (cmd == "dockunpair") {
-            clearDockPairing();
-            DBG_PRINTLN("[DOCK] pairing cleared via serial");
-          }
-          else if (cmd == "+") setVolume(currentVolume + 1);
-          else if (cmd == "-") setVolume(currentVolume - 1);
-          else if (cmd == "list") {
-            DBG_PRINTLN("Current playlist:");
-            for (size_t i = 0; i < playlist.size(); ++i) {
-              DBG_PRINTF("[%d] %s\n", i, playlist[i].c_str());
-            }
-          } else {
-            DBG_PRINTF("[UNKNOWN COMMAND] '%s'\n", input.c_str());
-          }
-        }
+    if (input.charAt(0) == 'P' && (input.length() > 1) && !isDigit(input.charAt(1))) {
+      String filename = input.substring(1);
+      filename.trim();
+      DBG_PRINTF("[SERIAL] Requested play: '%s'\n", filename.c_str());
+      if (!SD.exists(filename.c_str())) {
+        DBG_PRINTF("[ERROR] File not found on SD: '%s'\n", filename.c_str());
+      } else {
+        playWavFileOnSpeaker(filename.c_str());
       }
+      return;
     }
+
+    if (input.length() > 1 &&
+        (input.charAt(0) == 'F' || input.charAt(0) == 'B' || input.charAt(0) == 'L' || input.charAt(0) == 'R') &&
+        isDigit(input.charAt(1))) {
+      char cmd = input.charAt(0);
+      int value = input.substring(1).toInt();
+      if (cmd == 'F') controlMotorByDirection("Forward", value);
+      else if (cmd == 'B') controlMotorByDirection("Backward", value);
+      else if (cmd == 'L') controlMotorByDirection("Left", value);
+      else if (cmd == 'R') controlMotorByDirection("Right", value);
+      DBG_PRINTF("[SERIAL] Command: %c %d\n", cmd, value);
+      return;
+    }
+
+    String cmd = input;
+    cmd.toLowerCase();
+
+    if (cmd == "help") printSerialHelp();
+    else if (cmd == "next") nextTrack();
+    else if (cmd == "heap" || cmd == "debug") printDebugInfo();
+    else if (cmd == "serverreboot" || cmd == "rebootserver") {
+      DBG_PRINTLN("[SERIAL] Triggering webServerReboot by command...");
+      webServerReboot();
+    }        
+    else if (cmd == "wifi" || cmd == "debug") printWifiDebugInfo();
+    else if (cmd == "previous") prevTrack();
+    else if (cmd == "play") playCurrentTrack();
+    else if (cmd == "stop") {
+      stopAudio();
+      DBG_PRINTLN("[STOP]");
+    }
+    else if (cmd == "random") randomTrack();
+    else if (cmd == "nextfolder") nextFolder();
+    else if (cmd == "reset" || cmd == "reboot") resetESP();
+    else if (cmd == "dockadv on" || cmd == "adv on") {
+      dockDiscoveryEnabled = true;
+      dockPair.paired = false;
+      lastDockDiscoveryMs = 0;
+      saveDockPairingToPrefs();
+      DBG_PRINTLN("[DOCK] discovery enabled via serial");
+    }
+    else if (cmd == "dockadv off" || cmd == "adv off") {
+      dockDiscoveryEnabled = false;
+      saveDockPairingToPrefs();
+      DBG_PRINTLN("[DOCK] discovery disabled via serial");
+    }
+    else if (cmd == "dockunpair") {
+      clearDockPairing();
+      DBG_PRINTLN("[DOCK] pairing cleared via serial");
+    }
+    else if (cmd == "+") setVolume(currentVolume + 1);
+    else if (cmd == "-") setVolume(currentVolume - 1);
+    else if (cmd == "list") {
+      DBG_PRINTLN("Current playlist:");
+      for (size_t i = 0; i < playlist.size(); ++i) {
+        DBG_PRINTF("[%d] %s\n", i, playlist[i].c_str());
+      }
+    } else {
+      DBG_PRINTF("[UNKNOWN COMMAND] '%s'\n", input.c_str());
+    }
+  }
+
+  void handleSerialCommands() {
+    if (!Serial.available()) return;
+    String input = "";
+    while (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n' || c == '\r') break;
+      input += c;
+      delay(2);
+    }
+    executeSerialCommand(input);
   }
 
   void printDebugInfo() {

@@ -22,7 +22,7 @@
 			  <button class="tabButton" onclick="showTab('keysTab', this)">Controls</button>
 			  <button class="tabButton" onclick="showTab('camTab', this)">Camera</button>
 			  <button class="tabButton" onclick="showTab('robotTab', this)">Config</button>
-			  <button class="tabButton" onclick="showTab('viewTab', this); if (window.refreshViewWidgetMiniatures) window.refreshViewWidgetMiniatures();">View</button>
+			  <button class="tabButton" onclick="showTab('viewTab', this); if (window.refreshViewWidgetMiniatures) window.refreshViewWidgetMiniatures();">Widgets</button>
 			  <button class="tabButton" onclick="showTab('telemetryTab', this)">Telemetry</button>
 			  <button class="tabButton" onclick="showTab('wifiTab', this)">Wi-Fi</button>
 				<button class="tabButton" onclick="showTab('mqttTab', this)">MQTT</button>
@@ -787,9 +787,9 @@
 				<button onclick="saveRobotConfig()" class="ctrlBtn" id="gpioSaveBtn">Apply Config</button>
 			</div>
 
-		<!-- VIEW TAB -->
+		<!-- WIDGETS TAB -->
 		<div id="viewTab" class="tabContent" style="display:none;">
-		  <h3>View</h3>
+		  <h3>Widgets</h3>
 		  <div id="viewTabScroll" style="display:flex; flex-direction:column; gap:10px;">
 			<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
 			  <div style="display:flex; align-items:center; gap:12px; color:#d7e8ff; font-size:14px;">
@@ -903,6 +903,21 @@
 			  <div class="view-widget__preview">
 				<div class="view-widget__row"><span>3D Rover</span><span>Live</span></div>
 				<div class="view-widget__row"><span>Orientation</span><span>Telemetry</span></div>
+			  </div>
+			</div>
+			<div id="viewWidgetSerial"
+				 class="view-widget"
+				 data-widget="serial"
+				 draggable="false"
+				 title="Delete panel first, then drag this widget onto the stream to add it back.">
+			  <div class="view-widget__head">
+				<span class="view-widget__title">Serial Terminal</span>
+				<span class="view-widget__state">On Screen</span>
+			  </div>
+			  <div class="view-widget__preview">
+				<div class="view-widget__row"><span>Debug log</span><span>Live</span></div>
+				<div class="view-widget__row"><span>Command input</span><span>Ready</span></div>
+				<div class="view-widget__row"><span>Send command</span><span>Enter</span></div>
 			  </div>
 			</div>
 		  </div>

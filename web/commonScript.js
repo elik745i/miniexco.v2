@@ -25,6 +25,7 @@ let ledOn = false;
 let leftIndicator, rightIndicator, emergencyBtn, cameraStream;
 let latestBatteryPercent = 0;
 let latestBatteryVoltage = 0;
+let latestWifiQuality = 0;
 let micEnabled = false;
 let micStream = null;
 let micAudioElem = null;
@@ -1121,6 +1122,7 @@ function updateLedButtonState(isOn) {
 }
 
 function updateDeviceProgress(filename, elapsed, duration) {
+    if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("media")) return;
 	  if (typeof window.mediaPlayerUpdateDeviceProgress === "function") {
 		window.mediaPlayerUpdateDeviceProgress(filename, elapsed, duration);
 	  }
@@ -1128,6 +1130,7 @@ function updateDeviceProgress(filename, elapsed, duration) {
 	}
 
 function setDevicePlayState(filename, isPlaying) {
+    if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("media")) return;
 	  if (typeof window.mediaPlayerSetDevicePlayState === "function") {
 		window.mediaPlayerSetDevicePlayState(filename, isPlaying);
 	  }
@@ -1172,6 +1175,32 @@ function initWebSocket() {
     const deliver = (text) => {
       const msg = (typeof text === "string") ? text : String(text ?? "");
       try {
+      if (msg.startsWith("SERLOG,")) {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("serial")) return;
+        const encoded = msg.substring(7);
+        let line = encoded || "";
+        try {
+          line = decodeURIComponent(encoded || "");
+        } catch (_) {
+          line = encoded || "";
+        }
+        if (typeof window.appendSerialTerminalLine === "function") {
+          window.appendSerialTerminalLine(line);
+        } else {
+          const logEl = document.getElementById("serialTerminalLog");
+          if (logEl) {
+            const row = document.createElement("div");
+            row.className = "serial-terminal-line";
+            row.textContent = line;
+            logEl.appendChild(row);
+            while (logEl.children.length > 220) {
+              logEl.removeChild(logEl.firstChild);
+            }
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+        }
+        return;
+      }
 
       // --- MEDIA PLAYER DEVICE EVENTS ---
       if (msg.startsWith("MEDIA_DEVICE_PROGRESS,")) {
@@ -1185,6 +1214,7 @@ function initWebSocket() {
         return;
       }
       if (msg.startsWith("MEDIA_DEVICE_PLAYING,")) {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("media")) return;
         const filename = decodeURIComponent(msg.split(",")[1] || "");
         setDevicePlayState(filename, true);
         if (typeof window.mediaPlayerSetDeviceTransportState === "function") {
@@ -1193,12 +1223,14 @@ function initWebSocket() {
         return;
       }
       if (msg.startsWith("MEDIA_DEVICE_PAUSED")) {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("media")) return;
         if (typeof window.mediaPlayerSetDeviceTransportState === "function") {
           window.mediaPlayerSetDeviceTransportState("paused");
         }
         return;
       }
       if (msg.startsWith("MEDIA_DEVICE_STOPPED")) {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("media")) return;
         setDevicePlayState(null, false);
         if (typeof window.mediaPlayerSetDeviceTransportState === "function") {
           window.mediaPlayerSetDeviceTransportState("stopped");
@@ -1208,6 +1240,9 @@ function initWebSocket() {
 
       // --- IMU ---
       if (msg.startsWith("IMU,")) {
+        const imuActive = (typeof window.isWidgetActive === "function") ? window.isWidgetActive("imu") : true;
+        const modelActive = (typeof window.isWidgetActive === "function") ? window.isWidgetActive("model") : true;
+        if (!imuActive && !modelActive) return;
         const p = msg.split(",");
         if (p.length >= 8) {
           const [_, h, r, pch, mx, my, mz, temp] = p;
@@ -1258,14 +1293,20 @@ function initWebSocket() {
       }
 
       if (key === "FPS") {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("indicators")) {
+          window.cachedFps = parseInt(value || "0", 10) || 0;
+          return;
+        }
         const fpsValue = parseInt(value || "0", 10);
         const safeFps = Number.isNaN(fpsValue) ? 0 : Math.max(0, fpsValue);
         const fpsPct = (safeFps * 100) / FPS_BAR_MAX;
         updatePercentBar("fps", "FPS: " + safeFps, fpsPct);
         lastFPSUpdate = Date.now();
+        window.cachedFps = safeFps;
         return;
       }
       if (key === "HEAP") {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("indicators")) return;
         const totalBytes = parseInt(parts[1] || "0", 10);
         const freeBytes  = parseInt(parts[2] || "0", 10);
         updateMemoryBar("heap",
@@ -1275,6 +1316,7 @@ function initWebSocket() {
         return;
       }
       if (key === "PSRAM") {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("indicators")) return;
         const totalBytes = parseInt(parts[1] || "0", 10);
         const freeBytes = parseInt(parts[2] || "0", 10);
         updateMemoryBar("psram",
@@ -1301,6 +1343,8 @@ function initWebSocket() {
         const voltage = parseFloat(parts[2] || "0");
         latestBatteryVoltage = Number.isNaN(voltage) ? 0 : voltage;
         const wifiQuality = parseInt(parts[3] || "0", 10);
+        latestWifiQuality = Number.isNaN(wifiQuality) ? 0 : wifiQuality;
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("indicators")) return;
 
         const batteryText = document.getElementById('batteryText');
         const wifiText    = document.getElementById('wifiText');
@@ -1328,6 +1372,7 @@ function initWebSocket() {
       }
 
       if (key === "CHARGE") {
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("indicators")) return;
         const chargeIcon = document.getElementById("chargeIcon");
         if (!chargeIcon) return;
         const chargeState = (value || "").trim().toUpperCase();
@@ -1362,19 +1407,21 @@ function initWebSocket() {
         const chipTemp   = parseFloat(parts[2] || "0");
         const safeUptimeSecs = Number.isNaN(uptimeSecs) ? 0 : Math.max(0, uptimeSecs);
         const safeChipTemp = Number.isNaN(chipTemp) ? 0 : chipTemp;
-        const uptimePct = (safeUptimeSecs * 100) / UPTIME_BAR_MAX_SECS;
+        const indicatorsActive = !(typeof window.isWidgetActive === "function") || window.isWidgetActive("indicators");
+        if (indicatorsActive) {
+          const tempPct = (safeChipTemp * 100) / 105;
+          updatePercentBar(
+            "uptime",
+            "Uptime: " + formatUptimeCompact(safeUptimeSecs) + ", Temp: " + safeChipTemp.toFixed(1) + "C",
+            tempPct
+          );
 
-        updatePercentBar(
-          "uptime",
-          "Uptime: " + formatUptimeCompact(safeUptimeSecs) + ", Temp: " + safeChipTemp.toFixed(1) + "C",
-          uptimePct
-        );
-
-        const uptimeMeter = document.getElementById("uptimeMeter");
-        if (uptimeMeter) {
-          uptimeMeter.classList.remove("telemetry-meter--warn", "telemetry-meter--critical");
-          if (safeChipTemp >= 70) uptimeMeter.classList.add("telemetry-meter--critical");
-          else if (safeChipTemp >= 55) uptimeMeter.classList.add("telemetry-meter--warn");
+          const uptimeMeter = document.getElementById("uptimeMeter");
+          if (uptimeMeter) {
+            uptimeMeter.classList.remove("telemetry-meter--warn", "telemetry-meter--critical");
+            if (safeChipTemp >= 70) uptimeMeter.classList.add("telemetry-meter--critical");
+            else if (safeChipTemp >= 55) uptimeMeter.classList.add("telemetry-meter--warn");
+          }
         }
         return;
       }
@@ -2951,6 +2998,16 @@ function toggleCamera() {
     registerCameraPrereq("mini3d", Promise.resolve());
     return;
   }
+  if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("model")) {
+    const retry = setInterval(() => {
+      if (typeof window.isWidgetActive !== "function" || window.isWidgetActive("model")) {
+        clearInterval(retry);
+        initMini3D();
+      }
+    }, 1000);
+    registerCameraPrereq("mini3d", Promise.resolve());
+    return;
+  }
 
   const loaderUrl = '/web/GLTFLoader.js?v=' + assetTs;
 
@@ -3068,6 +3125,9 @@ function toggleCamera() {
 
       function tick() {
         requestAnimationFrame(tick);
+        if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("model")) {
+          return;
+        }
 
         const tgt = window._target3D || { roll:0, pitch:0, yaw:0 };
         smRoll    = lerp(smRoll,    tgt.roll,   0.18);

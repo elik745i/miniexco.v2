@@ -1,4 +1,4 @@
-// widgetScript.js - extracted widget subsystem from commonScript.js
+﻿// widgetScript.js - extracted widget subsystem from commonScript.js
 
 const memoryUiState = {
   open: null,
@@ -22,6 +22,7 @@ const VIEW_GRAVITY_STRENGTH_LOCAL_KEY = "viewGravityFxStrengthV1";
 const memoryFrameState = {
   x: null,
   y: null,
+  scale: 1,
   visible: true,
   dragArmed: false,
   dragUseGravity: true,
@@ -39,6 +40,7 @@ const overlayWidgetStates = {
     visible: true,
     x: null,
     y: null,
+    scale: 1,
     dragArmed: false,
     dragUseGravity: true,
     dragging: false,
@@ -56,6 +58,7 @@ const overlayWidgetStates = {
     visible: true,
     x: null,
     y: null,
+    scale: 1,
     dragArmed: false,
     dragUseGravity: true,
     dragging: false,
@@ -73,6 +76,7 @@ const overlayWidgetStates = {
     visible: true,
     x: null,
     y: null,
+    scale: 1,
     dragArmed: false,
     dragUseGravity: true,
     dragging: false,
@@ -90,6 +94,7 @@ const overlayWidgetStates = {
     visible: true,
     x: null,
     y: null,
+    scale: 1,
     dragArmed: false,
     dragUseGravity: true,
     dragging: false,
@@ -101,6 +106,24 @@ const overlayWidgetStates = {
     wsX: "Model3DX",
     wsY: "Model3DY",
     paletteId: "viewWidgetModel"
+  },
+  serial: {
+    id: "serialTerminalWrap",
+    visible: true,
+    x: null,
+    y: null,
+    scale: 1,
+    dragArmed: false,
+    dragUseGravity: true,
+    dragging: false,
+    dragOffsetX: 0,
+    dragOffsetY: 0,
+    pendingSettle: false,
+    pendingRoll: 1,
+    wsVisible: "SerialVisible",
+    wsX: "SerialX",
+    wsY: "SerialY",
+    paletteId: "viewWidgetSerial"
   }
 };
 const viewWidgetSourceIds = {
@@ -108,7 +131,8 @@ const viewWidgetSourceIds = {
   imu: "imuOverlay",
   media: "mediaControlsWrap",
   path: "pathControlsWrap",
-  model: "model3DWrap"
+  model: "model3DWrap",
+  serial: "serialTerminalWrap"
 };
 let viewWidgetMiniRenderPending = false;
 let gravityEffectEnabled = true;
@@ -200,6 +224,112 @@ function clampPct(value) {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+function clampWidgetScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0.6, Math.min(1.8, n));
+}
+
+function getElementRenderSize(el) {
+  if (!el) return { w: 1, h: 1 };
+  const rect = el.getBoundingClientRect();
+  return {
+    w: Math.max(1, Math.round(rect.width || el.offsetWidth || 1)),
+    h: Math.max(1, Math.round(rect.height || el.offsetHeight || 1))
+  };
+}
+
+function applyWidgetScale(type) {
+  if (type === "indicators") {
+    const wrap = getMemoryFrameWrap();
+    if (!wrap) return;
+    const s = clampWidgetScale(memoryFrameState.scale || 1);
+    memoryFrameState.scale = s;
+    wrap.style.zoom = s.toFixed(2);
+    return;
+  }
+  const st = getOverlayWidgetState(type);
+  const el = getOverlayWidgetEl(type);
+  if (!st || !el) return;
+  const s = clampWidgetScale(st.scale || 1);
+  st.scale = s;
+  el.style.zoom = s.toFixed(2);
+}
+
+function keepWidgetVisibleAfterScale(type) {
+  if (type === "indicators") {
+    const safe = canPlaceAnchorWithoutOverlap("indicators", memoryFrameState.x, memoryFrameState.y);
+    if (safe) {
+      memoryFrameState.x = safe.x;
+      memoryFrameState.y = safe.y;
+      applyUnifiedWidgetLayout("indicators", false, true, { preserveOthers: true });
+      nudgeWidgetInsideViewport("indicators");
+      return;
+    }
+    const def = memoryFrameDefaultPos();
+    memoryFrameState.x = def.x;
+    memoryFrameState.y = def.y;
+    applyUnifiedWidgetLayout("indicators", false, true, { preserveOthers: true });
+    nudgeWidgetInsideViewport("indicators");
+    return;
+  }
+
+  const st = getOverlayWidgetState(type);
+  if (!st) return;
+  const safe = canPlaceAnchorWithoutOverlap(type, st.x, st.y);
+  if (safe) {
+    st.x = safe.x;
+    st.y = safe.y;
+    applyUnifiedWidgetLayout(type, false, true, { preserveOthers: true });
+    nudgeWidgetInsideViewport(type);
+    return;
+  }
+  const def = defaultOverlayWidgetPos(type);
+  st.x = def.x;
+  st.y = def.y;
+  applyUnifiedWidgetLayout(type, false, true, { preserveOthers: true });
+  nudgeWidgetInsideViewport(type);
+}
+
+function nudgeWidgetInsideViewport(type) {
+  const margin = 8;
+  if (type === "indicators") {
+    const wrap = getMemoryFrameWrap();
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    let dx = 0;
+    let dy = 0;
+    if (rect.left < margin) dx = margin - rect.left;
+    if (rect.right > window.innerWidth - margin) dx = (window.innerWidth - margin) - rect.right;
+    if (rect.top < margin) dy = margin - rect.top;
+    if (rect.bottom > window.innerHeight - margin) dy = (window.innerHeight - margin) - rect.bottom;
+    if (dx !== 0 || dy !== 0) {
+      memoryFrameState.x = Math.round((Number(memoryFrameState.x) || 0) + dx);
+      memoryFrameState.y = Math.round((Number(memoryFrameState.y) || 0) + dy);
+      applyMemoryFramePosition(false);
+      persistMemoryFrameState(true);
+    }
+    return;
+  }
+
+  const st = getOverlayWidgetState(type);
+  const el = getOverlayWidgetEl(type);
+  if (!st || !el) return;
+  const rect = el.getBoundingClientRect();
+  let dx = 0;
+  let dy = 0;
+  if (rect.left < margin) dx = margin - rect.left;
+  if (rect.right > window.innerWidth - margin) dx = (window.innerWidth - margin) - rect.right;
+  if (rect.top < margin) dy = margin - rect.top;
+  if (rect.bottom > window.innerHeight - margin) dy = (window.innerHeight - margin) - rect.bottom;
+  if (dx !== 0 || dy !== 0) {
+    st.x = Math.round((Number(st.x) || 0) + dx);
+    st.y = Math.round((Number(st.y) || 0) + dy);
+    applyOverlayWidgetPosition(type, false);
+    persistOverlayWidgetState(type, true);
+  }
+}
+
 function updatePercentBar(kind, valueText, pctValue) {
   const textEl = document.getElementById(kind + "Text");
   const pctEl = document.getElementById(kind + "Pct");
@@ -208,7 +338,12 @@ function updatePercentBar(kind, valueText, pctValue) {
 
   if (textEl) textEl.innerText = valueText;
   if (pctEl) pctEl.innerText = pct + "%";
-  if (fillEl) fillEl.style.width = pct + "%";
+  if (fillEl) {
+    const bar = fillEl.parentElement;
+    const fullW = bar ? Math.max(1, Math.round(bar.clientWidth || bar.offsetWidth || 1)) : 1;
+    fillEl.style.setProperty("--bar-full-width", fullW + "px");
+    fillEl.style.width = pct + "%";
+  }
 }
 
 function formatUptimeCompact(totalSecs) {
@@ -222,6 +357,7 @@ function formatUptimeCompact(totalSecs) {
 }
 
 function updateMemoryBar(kind, totalBytes, freeBytes) {
+  if (!memoryFrameState.visible) return;
   const total = Number.isFinite(totalBytes) ? totalBytes : 0;
   const free = Number.isFinite(freeBytes) ? freeBytes : 0;
   const used = Math.max(0, total - free);
@@ -265,6 +401,7 @@ function renderTaskRows(containerId, tasks) {
 }
 
 async function fetchAndRenderHeapReport() {
+  if (!memoryFrameState.visible) return;
   try {
     const r = await fetch("/heap_report?t=" + Date.now(), { cache: "no-store" });
     if (!r.ok) return;
@@ -294,6 +431,7 @@ async function fetchAndRenderHeapReport() {
 }
 
 function setMemoryPanelOpen(kind) {
+  if (!memoryFrameState.visible) return;
   const battery = document.getElementById("batteryMeter");
   const heap = document.getElementById("heapOverlay");
   const psram = document.getElementById("psramOverlay");
@@ -409,11 +547,12 @@ function applyMemoryExpansionLift() {
   const hostRect = host.getBoundingClientRect();
   const minX = getControlsAvoidLeftPx();
   const memPos = getRenderedWidgetPos(wrap, hostRect, minX);
+  const memSize = getElementRenderSize(wrap);
   const memBox = {
     x: memPos.x,
     y: memPos.y,
-    w: Math.max(1, wrap.offsetWidth || 1),
-    h: Math.max(1, wrap.offsetHeight || 1)
+    w: memSize.w,
+    h: memSize.h
   };
 
   const widgets = [];
@@ -422,12 +561,13 @@ function applyMemoryExpansionLift() {
     const el = getOverlayWidgetEl(type);
     if (!st || !el || !st.visible) return;
     const p = getRenderedWidgetPos(el, hostRect, minX);
+    const s = getElementRenderSize(el);
     widgets.push({
       type,
       x: p.x,
       y: p.y,
-      w: Math.max(1, el.offsetWidth || 1),
-      h: Math.max(1, el.offsetHeight || 1)
+      w: s.w,
+      h: s.h
     });
   });
 
@@ -512,28 +652,42 @@ function getOverlayWidgetEl(type) {
   return document.getElementById(st.id);
 }
 
+window.isWidgetActive = function isWidgetActive(type) {
+  if (type === "indicators") return !!memoryFrameState.visible;
+  const st = getOverlayWidgetState(type);
+  return !!(st && st.visible);
+};
+
 function defaultOverlayWidgetPos(type) {
   const host = getMemoryFrameHost();
   const el = getOverlayWidgetEl(type);
   if (!host || !el) return { x: MEMORY_FRAME_MARGIN, y: MEMORY_FRAME_MARGIN };
+  const size = getElementRenderSize(el);
+  const ew = size.w;
+  const eh = size.h;
 
   if (type === "imu") {
-    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - el.offsetHeight - 100);
+    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - eh - 100);
     return { x: MEMORY_FRAME_MARGIN, y };
   }
   if (type === "media") {
-    const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - el.offsetWidth - MEMORY_FRAME_MARGIN);
-    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - el.offsetHeight - 90);
+    const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - ew - MEMORY_FRAME_MARGIN);
+    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - eh - 90);
     return { x, y };
   }
   if (type === "path") {
-    const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - el.offsetWidth - MEMORY_FRAME_MARGIN);
-    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - el.offsetHeight - 340);
+    const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - ew - MEMORY_FRAME_MARGIN);
+    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - eh - 340);
     return { x, y };
   }
   if (type === "model") {
-    const x = Math.max(MEMORY_FRAME_MARGIN, Math.round((host.clientWidth - el.offsetWidth) / 2));
-    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - el.offsetHeight - 90);
+    const x = Math.max(MEMORY_FRAME_MARGIN, Math.round((host.clientWidth - ew) / 2));
+    const y = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - eh - 90);
+    return { x, y };
+  }
+  if (type === "serial") {
+    const x = MEMORY_FRAME_MARGIN;
+    const y = MEMORY_FRAME_MARGIN;
     return { x, y };
   }
   return { x: MEMORY_FRAME_MARGIN, y: MEMORY_FRAME_MARGIN };
@@ -543,9 +697,12 @@ function clampOverlayWidgetStoredPos(type, x, y) {
   const host = getMemoryFrameHost();
   const el = getOverlayWidgetEl(type);
   if (!host || !el) return { x: x || 0, y: y || 0 };
+  const rect = el.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width || el.offsetWidth || 1));
+  const h = Math.max(1, Math.round(rect.height || el.offsetHeight || 1));
   const minX = MEMORY_FRAME_MARGIN;
-  const maxX = Math.max(0, host.clientWidth - el.offsetWidth - MEMORY_FRAME_MARGIN);
-  const maxY = Math.max(0, host.clientHeight - el.offsetHeight - MEMORY_FRAME_MARGIN);
+  const maxX = Math.max(0, host.clientWidth - w - MEMORY_FRAME_MARGIN);
+  const maxY = Math.max(0, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   return {
     x: Math.max(minX, Math.min(maxX, Math.round(Number(x) || 0))),
     y: Math.max(MEMORY_FRAME_MARGIN, Math.min(maxY, Math.round(Number(y) || 0)))
@@ -566,6 +723,9 @@ function applyOverlayWidgetVisibility(type) {
   const el = getOverlayWidgetEl(type);
   if (!st || !el) return;
   el.classList.toggle("widget-hidden", !st.visible);
+  if (type === "serial" && st.visible && !serialTerminalState.historyLoaded) {
+    loadSerialTerminalHistory();
+  }
 }
 
 function applyOverlayWidgetPosition(type, animated) {
@@ -595,7 +755,7 @@ function persistOverlayWidgetState(type, sendToDevice) {
   try {
     const raw = localStorage.getItem(WIDGET_FRAME_LOCAL_KEY);
     const bag = raw ? JSON.parse(raw) : {};
-    bag[type] = { x: st.x, y: st.y, visible: st.visible ? 1 : 0 };
+    bag[type] = { x: st.x, y: st.y, visible: st.visible ? 1 : 0, scale: clampWidgetScale(st.scale || 1) };
     localStorage.setItem(WIDGET_FRAME_LOCAL_KEY, JSON.stringify(bag));
   } catch (_) {}
   if (sendToDevice && typeof sendButtonInput === "function") {
@@ -621,6 +781,9 @@ function restoreOverlayWidgetStateFromLocal(type) {
     if (typeof item.visible !== "undefined") {
       st.visible = Number(item.visible) === 1;
     }
+    if (typeof item.scale !== "undefined") {
+      st.scale = clampWidgetScale(item.scale);
+    }
   } catch (_) {}
 }
 
@@ -642,9 +805,12 @@ function clampMemoryFrameStoredPos(x, y) {
   const wrap = getMemoryFrameWrap();
   const host = getMemoryFrameHost();
   if (!wrap || !host) return { x: x || 0, y: y || 0 };
+  const rect = wrap.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width || wrap.offsetWidth || 1));
+  const h = Math.max(1, Math.round(rect.height || wrap.offsetHeight || 1));
   const minX = MEMORY_FRAME_MARGIN;
-  const maxX = Math.max(0, host.clientWidth - wrap.offsetWidth - MEMORY_FRAME_MARGIN);
-  const maxY = Math.max(0, host.clientHeight - wrap.offsetHeight - MEMORY_FRAME_MARGIN);
+  const maxX = Math.max(0, host.clientWidth - w - MEMORY_FRAME_MARGIN);
+  const maxY = Math.max(0, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   return {
     x: Math.max(minX, Math.min(maxX, Math.round(Number(x) || 0))),
     y: Math.max(MEMORY_FRAME_MARGIN, Math.min(maxY, Math.round(Number(y) || 0)))
@@ -906,8 +1072,8 @@ function applyUnifiedWidgetLayout(anchorType, animated, commitStored, opts) {
     items.push({
       type: "indicators",
       el: memoryWrap,
-      w: Math.max(1, memoryWrap.offsetWidth || 1),
-      h: Math.max(1, memoryWrap.offsetHeight || 1),
+      w: getElementRenderSize(memoryWrap).w,
+      h: getElementRenderSize(memoryWrap).h,
       storedX: memoryFrameState.x,
       storedY: memoryFrameState.y,
       desiredX: desired.x,
@@ -931,8 +1097,8 @@ function applyUnifiedWidgetLayout(anchorType, animated, commitStored, opts) {
     items.push({
       type,
       el,
-      w: Math.max(1, el.offsetWidth || 1),
-      h: Math.max(1, el.offsetHeight || 1),
+      w: getElementRenderSize(el).w,
+      h: getElementRenderSize(el).h,
       storedX: st.x,
       storedY: st.y,
       desiredX: desired.x,
@@ -1089,8 +1255,9 @@ function getWidgetSupportState(kind, x, y) {
 
   const hostRect = host.getBoundingClientRect();
   const minX = getControlsAvoidLeftPx();
-  const w = Math.max(1, el.offsetWidth || 1);
-  const h = Math.max(1, el.offsetHeight || 1);
+  const size = getElementRenderSize(el);
+  const w = size.w;
+  const h = size.h;
   const maxX = Math.max(minX, host.clientWidth - w - MEMORY_FRAME_MARGIN);
   const maxY = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   const px = Math.max(minX, Math.min(maxX, Number(x) || minX));
@@ -1136,7 +1303,7 @@ function shouldRunGravitySettle(kind, x, y) {
   const el = getWidgetPhysicsEl(kind);
   if (!host || !el) return false;
 
-  const h = Math.max(1, el.offsetHeight || 1);
+  const h = getElementRenderSize(el).h;
   const maxY = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   const py = Number(y);
   if (!Number.isFinite(py)) return false;
@@ -1186,8 +1353,9 @@ function startWidgetMatterSimulation(kind, rollDir) {
 
   const hostRect = host.getBoundingClientRect();
   const minX = getControlsAvoidLeftPx();
-  const w = Math.max(1, el.offsetWidth || 1);
-  const h = Math.max(1, el.offsetHeight || 1);
+  const size = getElementRenderSize(el);
+  const w = size.w;
+  const h = size.h;
   const maxX = Math.max(minX, host.clientWidth - w - MEMORY_FRAME_MARGIN);
   const maxY = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   const strengthNorm = Math.max(0, Math.min(100, gravityEffectStrength)) / 100;
@@ -1309,8 +1477,9 @@ function startWidgetFallSimulation(kind, rollDir) {
 
   const hostRect = host.getBoundingClientRect();
   const minX = getControlsAvoidLeftPx();
-  const w = Math.max(1, el.offsetWidth || 1);
-  const h = Math.max(1, el.offsetHeight || 1);
+  const size = getElementRenderSize(el);
+  const w = size.w;
+  const h = size.h;
   const maxX = Math.max(minX, host.clientWidth - w - MEMORY_FRAME_MARGIN);
   const maxY = Math.max(MEMORY_FRAME_MARGIN, host.clientHeight - h - MEMORY_FRAME_MARGIN);
   const obstacles = collectObstacleRects(kind, hostRect, minX);
@@ -1506,8 +1675,9 @@ function canPlaceAnchorWithoutOverlap(anchorType, desiredX, desiredY) {
   else anchorEl = getOverlayWidgetEl(anchorType);
   if (!anchorEl) return null;
 
-  const w = Math.max(1, anchorEl.offsetWidth || 1);
-  const h = Math.max(1, anchorEl.offsetHeight || 1);
+  const anchorSize = getElementRenderSize(anchorEl);
+  const w = anchorSize.w;
+  const h = anchorSize.h;
   const p0 = clampWidgetPosToBounds(host, minX, w, h, desiredX, desiredY);
   const candidate = { x: p0.x, y: p0.y, w, h };
 
@@ -1519,7 +1689,8 @@ function canPlaceAnchorWithoutOverlap(anchorType, desiredX, desiredY) {
   const mem = getMemoryFrameWrap();
   if (mem && memoryFrameState.visible && anchorType !== "indicators") {
     const p = getRenderedWidgetPos(mem, hostRect, minX);
-    others.push({ x: p.x, y: p.y, w: Math.max(1, mem.offsetWidth || 1), h: Math.max(1, mem.offsetHeight || 1) });
+    const s = getElementRenderSize(mem);
+    others.push({ x: p.x, y: p.y, w: s.w, h: s.h });
   }
   Object.keys(overlayWidgetStates).forEach((type) => {
     if (type === anchorType) return;
@@ -1527,7 +1698,8 @@ function canPlaceAnchorWithoutOverlap(anchorType, desiredX, desiredY) {
     const el = getOverlayWidgetEl(type);
     if (!st || !el || !st.visible) return;
     const p = getRenderedWidgetPos(el, hostRect, minX);
-    others.push({ x: p.x, y: p.y, w: Math.max(1, el.offsetWidth || 1), h: Math.max(1, el.offsetHeight || 1) });
+    const s = getElementRenderSize(el);
+    others.push({ x: p.x, y: p.y, w: s.w, h: s.h });
   });
 
   if (!overlapsAnyRect(candidate, others)) {
@@ -1576,7 +1748,8 @@ function memoryFrameDefaultPos() {
   const wrap = getMemoryFrameWrap();
   const host = getMemoryFrameHost();
   if (!wrap || !host) return { x: MEMORY_FRAME_MARGIN, y: MEMORY_FRAME_MARGIN };
-  const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - wrap.offsetWidth - MEMORY_FRAME_MARGIN);
+  const w = getElementRenderSize(wrap).w;
+  const x = Math.max(MEMORY_FRAME_MARGIN, host.clientWidth - w - MEMORY_FRAME_MARGIN);
   return { x, y: MEMORY_FRAME_MARGIN };
 }
 
@@ -1611,7 +1784,8 @@ function persistMemoryFrameState(sendToDevice) {
     localStorage.setItem(MEMORY_FRAME_LOCAL_KEY, JSON.stringify({
       x: memoryFrameState.x,
       y: memoryFrameState.y,
-      visible: memoryFrameState.visible ? 1 : 0
+      visible: memoryFrameState.visible ? 1 : 0,
+      scale: clampWidgetScale(memoryFrameState.scale || 1)
     }));
   } catch (_) {}
 
@@ -1662,10 +1836,11 @@ function openWidgetContextMenu(type, clientX, clientY) {
   const menu = document.createElement("div");
   menu.className = "memory-context-menu";
   menu.innerHTML = [
-    '<button type="button" data-action="gravity-drag">🌍 gravityDrag</button>',
-    '<button type="button" data-action="default">🏠 Default</button>',
-    '<button type="button" data-action="delete">🗑 Delete</button>',
-    '<button type="button" data-action="drag">✋ Drag</button>'
+    '<button type="button" data-action="gravity-drag"><span class="memory-context-menu__icon memory-context-menu__icon--gravity">&#127760;</span><span>gravityDrag</span></button>',
+    '<button type="button" data-action="default"><span class="memory-context-menu__icon memory-context-menu__icon--default">&#127968;</span><span>Default</span></button>',
+    '<button type="button" data-action="delete"><span class="memory-context-menu__icon memory-context-menu__icon--delete">&#128465;</span><span>Delete</span></button>',
+    '<button type="button" data-action="drag"><span class="memory-context-menu__icon memory-context-menu__icon--drag">&#9995;</span><span>Drag</span></button>',
+    '<button type="button" data-action="scale"><span class="memory-context-menu__icon memory-context-menu__icon--scale">&#128269;</span><span>Scale</span></button>'
   ].join("");
   document.body.appendChild(menu);
 
@@ -1675,9 +1850,27 @@ function openWidgetContextMenu(type, clientX, clientY) {
   menu.style.top = Math.max(6, Math.min(maxTop, Math.round(clientY))) + "px";
 
   menu.addEventListener("click", (e) => {
-    const action = e.target && e.target.getAttribute("data-action");
+    const btn = e.target && e.target.closest ? e.target.closest("button[data-action]") : null;
+    const action = btn ? btn.getAttribute("data-action") : null;
     if (!action) return;
     if (type === "indicators") {
+      if (action === "scale") {
+        const curPct = Math.round(clampWidgetScale(memoryFrameState.scale || 1) * 100);
+        const raw = prompt("Widget scale (%): 60-180", String(curPct));
+        if (raw !== null) {
+          const pct = Number(raw);
+          if (Number.isFinite(pct)) {
+            memoryFrameState.scale = clampWidgetScale(pct / 100);
+            applyWidgetScale("indicators");
+            keepWidgetVisibleAfterScale("indicators");
+            persistMemoryFrameState(true);
+          }
+        }
+        refreshViewWidgetMiniaturesSoon();
+        refreshViewWidgetPalette();
+        closeMemoryContextMenu();
+        return;
+      }
       if (action === "gravity-drag") {
         armMemoryDragMode(true);
       } else if (action === "drag") {
@@ -1700,6 +1893,23 @@ function openWidgetContextMenu(type, clientX, clientY) {
     } else {
       const st = getOverlayWidgetState(type);
       if (!st) return;
+      if (action === "scale") {
+        const curPct = Math.round(clampWidgetScale(st.scale || 1) * 100);
+        const raw = prompt("Widget scale (%): 60-180", String(curPct));
+        if (raw !== null) {
+          const pct = Number(raw);
+          if (Number.isFinite(pct)) {
+            st.scale = clampWidgetScale(pct / 100);
+            applyWidgetScale(type);
+            keepWidgetVisibleAfterScale(type);
+            persistOverlayWidgetState(type, true);
+          }
+        }
+        refreshViewWidgetMiniaturesSoon();
+        refreshViewWidgetPalette();
+        closeMemoryContextMenu();
+        return;
+      }
       if (action === "gravity-drag") {
         armOverlayWidgetDrag(type, true);
       } else if (action === "drag") {
@@ -1744,9 +1954,10 @@ function placeWidgetFromDrop(type, clientX, clientY) {
   if (type === "indicators") {
     const wrap = getMemoryFrameWrap();
     if (!wrap) return false;
+    const wrapRect = wrap.getBoundingClientRect();
     memoryFrameState.visible = true;
-    memoryFrameState.x = clientX - hostRect.left - Math.round(wrap.offsetWidth / 2);
-    memoryFrameState.y = clientY - hostRect.top - Math.round(wrap.offsetHeight / 2);
+    memoryFrameState.x = clientX - hostRect.left - Math.round((wrapRect.width || wrap.offsetWidth) / 2);
+    memoryFrameState.y = clientY - hostRect.top - Math.round((wrapRect.height || wrap.offsetHeight) / 2);
     applyMemoryFrameVisibility();
     const dropSafe = canPlaceAnchorWithoutOverlap("indicators", memoryFrameState.x, memoryFrameState.y);
     if (dropSafe) {
@@ -1771,9 +1982,10 @@ function placeWidgetFromDrop(type, clientX, clientY) {
   const st = getOverlayWidgetState(type);
   const el = getOverlayWidgetEl(type);
   if (!st || !el) return false;
+  const elRect = el.getBoundingClientRect();
   st.visible = true;
-  st.x = clientX - hostRect.left - Math.round(el.offsetWidth / 2);
-  st.y = clientY - hostRect.top - Math.round(el.offsetHeight / 2);
+  st.x = clientX - hostRect.left - Math.round((elRect.width || el.offsetWidth) / 2);
+  st.y = clientY - hostRect.top - Math.round((elRect.height || el.offsetHeight) / 2);
   applyOverlayWidgetVisibility(type);
   const dropSafe = canPlaceAnchorWithoutOverlap(type, st.x, st.y);
   if (dropSafe) {
@@ -1897,6 +2109,7 @@ function initOverlayWidgetFrame(type) {
   });
 
   applyOverlayWidgetVisibility(type);
+  applyWidgetScale(type);
   applyOverlayWidgetPosition(type, false);
 }
 
@@ -1917,8 +2130,13 @@ function initMemoryFrameInteractions() {
       if (parsed && typeof parsed.visible !== "undefined") {
         memoryFrameState.visible = Number(parsed.visible) === 1;
       }
+      if (parsed && typeof parsed.scale !== "undefined") {
+        memoryFrameState.scale = clampWidgetScale(parsed.scale);
+      }
     }
   } catch (_) {}
+
+  applyWidgetScale("indicators");
 
   const startDrag = (clientX, clientY) => {
     if (!memoryFrameState.dragArmed || !memoryFrameState.visible) return;
@@ -2069,6 +2287,8 @@ function initMemoryFrameInteractions() {
   initOverlayWidgetFrame("media");
   initOverlayWidgetFrame("path");
   initOverlayWidgetFrame("model");
+  initOverlayWidgetFrame("serial");
+  initSerialTerminalWidget();
   initViewWidgetPalette();
 }
 
@@ -2089,8 +2309,36 @@ function refreshViewWidgetPalette() {
     widget.setAttribute("draggable", enabled ? "true" : "false");
     const stateEl = widget.querySelector(".view-widget__state");
     if (stateEl) stateEl.textContent = enabled ? "Available" : "On Screen";
+    const retrieveBtn = widget.querySelector(".view-widget__retrieve-btn");
+    if (retrieveBtn) {
+      retrieveBtn.disabled = enabled;
+      retrieveBtn.title = enabled ? "Widget is already in palette" : "Remove from screen and return to palette";
+    }
   });
   refreshViewWidgetMiniaturesSoon();
+}
+
+function retrieveWidgetToPalette(type) {
+  if (!type) return;
+  if (type === "indicators") {
+    memoryFrameState.scale = 1;
+    applyWidgetScale("indicators");
+    memoryFrameState.visible = false;
+    applyMemoryFrameVisibility();
+    disarmMemoryDragMode();
+    persistMemoryFrameState(true);
+    refreshViewWidgetPalette();
+    return;
+  }
+  const st = getOverlayWidgetState(type);
+  if (!st) return;
+  st.scale = 1;
+  applyWidgetScale(type);
+  st.visible = false;
+  applyOverlayWidgetVisibility(type);
+  disarmOverlayWidgetDrag(type);
+  persistOverlayWidgetState(type, true);
+  refreshViewWidgetPalette();
 }
 
 function initViewWidgetPalette() {
@@ -2118,11 +2366,118 @@ function initViewWidgetPalette() {
       dt.setData("application/x-miniexco-widget", type);
       dt.setData("text/plain", type);
     });
+
+    const head = widget.querySelector(".view-widget__head");
+    if (head) {
+      let controls = head.querySelector(".view-widget__controls");
+      if (!controls) {
+        controls = document.createElement("div");
+        controls.className = "view-widget__controls";
+        const stateEl = head.querySelector(".view-widget__state");
+        if (stateEl) controls.appendChild(stateEl);
+        head.appendChild(controls);
+      }
+      if (!controls.querySelector(".view-widget__retrieve-btn")) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "view-widget__retrieve-btn";
+        btn.textContent = "Retrieve";
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const t = widget.getAttribute("data-widget");
+          retrieveWidgetToPalette(t);
+        });
+        controls.appendChild(btn);
+      }
+    }
   });
   refreshViewWidgetPalette();
   refreshViewWidgetMiniaturesSoon();
 }
 window.initViewWidgetPalette = initViewWidgetPalette;
+
+const SERIAL_TERMINAL_MAX_LINES = 200;
+const serialTerminalState = {
+  initialized: false,
+  historyLoaded: false,
+  lines: []
+};
+
+window.appendSerialTerminalLine = function appendSerialTerminalLine(line) {
+  const logEl = document.getElementById("serialTerminalLog");
+  const text = String(line ?? "");
+  serialTerminalState.lines.push(text);
+  if (serialTerminalState.lines.length > SERIAL_TERMINAL_MAX_LINES) {
+    serialTerminalState.lines.splice(0, serialTerminalState.lines.length - SERIAL_TERMINAL_MAX_LINES);
+  }
+  if (!logEl) return;
+  const row = document.createElement("div");
+  row.className = "serial-terminal-line";
+  row.textContent = text;
+  logEl.appendChild(row);
+  while (logEl.children.length > SERIAL_TERMINAL_MAX_LINES) {
+    logEl.removeChild(logEl.firstChild);
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+};
+
+async function loadSerialTerminalHistory() {
+  if (typeof window.isWidgetActive === "function" && !window.isWidgetActive("serial")) return;
+  try {
+    const r = await fetch("/serial/logs", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const lines = Array.isArray(j?.lines) ? j.lines : [];
+    serialTerminalState.lines = [];
+    serialTerminalState.historyLoaded = true;
+    const logEl = document.getElementById("serialTerminalLog");
+    if (logEl) logEl.innerHTML = "";
+    lines.forEach((line) => window.appendSerialTerminalLine(line));
+  } catch (_) {}
+}
+
+async function sendSerialTerminalCommand() {
+  const inputEl = document.getElementById("serialTerminalInput");
+  if (!inputEl) return;
+  const cmd = String(inputEl.value || "").trim();
+  if (!cmd) return;
+  inputEl.value = "";
+  window.appendSerialTerminalLine("> " + cmd);
+  try {
+    const form = new URLSearchParams();
+    form.set("cmd", cmd);
+    const r = await fetch("/serial/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      cache: "no-store"
+    });
+    if (!r.ok) {
+      window.appendSerialTerminalLine("[ERR] command failed: HTTP " + r.status);
+    }
+  } catch (err) {
+    window.appendSerialTerminalLine("[ERR] command failed: " + (err?.message || "network"));
+  }
+}
+
+function initSerialTerminalWidget() {
+  if (serialTerminalState.initialized) return;
+  const inputEl = document.getElementById("serialTerminalInput");
+  const sendBtn = document.getElementById("serialTerminalSendBtn");
+  if (!inputEl || !sendBtn) return;
+  serialTerminalState.initialized = true;
+  sendBtn.addEventListener("click", sendSerialTerminalCommand);
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      sendSerialTerminalCommand();
+    }
+  });
+  if (typeof window.isWidgetActive !== "function" || window.isWidgetActive("serial")) {
+    loadSerialTerminalHistory();
+  }
+}
 
 function sanitizeMiniClone(root) {
   if (!root) return;
@@ -2397,3 +2752,5 @@ function wireBatteryText() {
   window.renderBatteryInlineGraph = renderBatteryInlineGraph;
 
 }
+
+
