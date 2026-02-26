@@ -1,242 +1,248 @@
-// --- OTA TAB LOGIC ---
+﻿// OTA tab logic.
+(function () {
+  const OTA_REPO_OWNER = "elik745i";
+  const OTA_REPO_NAME = "miniexco.v2";
+  const OTA_RELEASE_API = `https://api.github.com/repos/${OTA_REPO_OWNER}/${OTA_REPO_NAME}/releases/latest`;
 
-window.uploadFirmware = function () {
-	const fileInput = document.getElementById("otaFile");
-	const status = document.getElementById("otaStatus");
-	const progress = document.getElementById("otaProgress");
-	const file = fileInput.files[0];
+  function otaStatusEl() {
+    return document.getElementById("otaStatus");
+  }
 
-	if (!file) {
-		status.innerText = "Please select a file.";
-		return;
-	}
+  function otaProgressEl() {
+    return document.getElementById("otaProgress");
+  }
 
-	// ⚠️ Battery warning if below 50%
-	if (latestBatteryPercent < 50) {
-		const proceed = confirm(
-			`⚠️ Battery is at ${latestBatteryPercent}%.\nIt's recommended to have at least 50% to prevent failure during update.\nContinue anyway?`
-		);
-		if (!proceed) {
-			status.innerText = "❌ Upload cancelled due to low battery.";
-			return;
-		}
-	}
+  function setStatus(text) {
+    const status = otaStatusEl();
+    if (status) status.textContent = text;
+  }
 
-	const xhr = new XMLHttpRequest();
-	xhr.open("POST", "/ota/upload", true);
+  function setProgress(value, visible) {
+    const progress = otaProgressEl();
+    if (!progress) return;
+    progress.value = value;
+    progress.style.display = visible ? "block" : "none";
+  }
 
-	xhr.upload.onprogress = function (e) {
-		if (e.lengthComputable) {
-			progress.style.display = "block";
-			progress.value = (e.loaded / e.total) * 100;
-		}
-	};
+  function currentBatteryPercent() {
+    if (typeof window.latestBatteryPercent !== "number") return 100;
+    return window.latestBatteryPercent;
+  }
 
-	xhr.onreadystatechange = function () {
-		if (xhr.readyState === 4) {
-			if (xhr.status === 200) {
-				status.innerText = "✅ Upload successful. Rebooting...";
-				setTimeout(() => location.reload(), 5000);
-			} else if (xhr.status === 0) {
-				status.innerText = "✅ Firmware uploaded. Waiting for reboot...";
-				setTimeout(() => location.reload(), 6000);
-			} else {
-				status.innerText = "❌ Upload failed.";
-			}
-		}
-	};
+  function ensureBatteryForOta(interactive) {
+    const pct = currentBatteryPercent();
+    if (pct >= 50) return true;
+    if (!interactive) return false;
+    return confirm(
+      `Battery is ${pct}%. Recommended minimum is 50% for OTA.\nContinue anyway?`
+    );
+  }
 
-	const formData = new FormData();
-	formData.append("update", file);
-	xhr.send(formData);
-};
+  function normalizeVersion(v) {
+    const s = String(v || "").replace(/^v/i, "");
+    return s.split(/[^\d.]+/)[0];
+  }
 
+  function compareVersions(a, b) {
+    const aa = normalizeVersion(a).split(".").map((n) => parseInt(n || "0", 10));
+    const bb = normalizeVersion(b).split(".").map((n) => parseInt(n || "0", 10));
+    while (aa.length < 3) aa.push(0);
+    while (bb.length < 3) bb.push(0);
+    for (let i = 0; i < 3; i += 1) {
+      if (aa[i] > bb[i]) return 1;
+      if (aa[i] < bb[i]) return -1;
+    }
+    return 0;
+  }
 
-window.onFirmwareFileSelected = function () {
-	const fileInput = document.getElementById("otaFile");
-	const file = fileInput.files[0];
-	const status = document.getElementById("otaStatus");
-	const versionBox = document.getElementById("versionCompare");
-	const selected = document.getElementById("selectedVersion");
-	const current = document.getElementById("currentVersion");
-	const uploadBtn = document.getElementById("uploadBtn");
+  function chooseFirmwareAsset(release) {
+    const assets = Array.isArray(release?.assets) ? release.assets : [];
+    const preferred = assets.find((a) => /\.ino\.bin$/i.test(a.name || ""));
+    if (preferred?.browser_download_url) return preferred.browser_download_url;
+    const generic = assets.find((a) => {
+      const n = String(a.name || "").toLowerCase();
+      return n.endsWith(".bin") && !n.includes("bootloader") && !n.includes("partitions");
+    });
+    return generic?.browser_download_url || null;
+  }
 
-	if (!file) {
-		versionBox.style.display = "none";
-		uploadBtn.style.display = "none";
-		return;
-	}
+  async function fetchLocalVersion() {
+    const r = await fetch("/version", { cache: "no-store" });
+    if (!r.ok) throw new Error(`Local version request failed (${r.status})`);
+    return r.json();
+  }
 
-	const reader = new FileReader();
-	reader.onload = function (e) {
-		const bin = new Uint8Array(e.target.result);
-		const text = new TextDecoder().decode(bin);
+  async function fetchLatestRelease() {
+    const r = await fetch(OTA_RELEASE_API, {
+      headers: { Accept: "application/vnd.github+json" },
+      cache: "no-store",
+    });
+    if (!r.ok) throw new Error(`GitHub latest release request failed (${r.status})`);
+    return r.json();
+  }
 
-		// Find all version strings in the text
-		const allMatches = [...text.matchAll(/v\d+\.\d+\.\d{1,2}(?: ?[A-Za-z]+)?/gi)];
+  function uploadBlobToDevice(blob, filename) {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("update", blob, filename || "firmware.bin");
 
-		console.log("All version matches found:", allMatches.map(m => m[0]));
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/ota/upload", true);
 
-		// Use the last match (usually your firmware version)
-		let match = null;
-		if (allMatches.length > 0) {
-			match = [null, allMatches[allMatches.length - 1][0]]; // last match
-		} else {
-			match = null;
-		}
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        setProgress((e.loaded / e.total) * 100, true);
+      };
 
-		selected.innerText = match ? match[1] : "❓ Unknown";
+      xhr.onload = () => {
+        if (xhr.status === 200 || xhr.status === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Upload failed (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Upload failed (network error)"));
+      xhr.send(formData);
+    });
+  }
 
-		fetch("/version")
-			.then(res => res.json())
-			.then(data => {
-				current.innerText = data.current;
-				versionBox.style.display = "block";
-				uploadBtn.style.display = "inline-block";
-				status.innerText = "";
-			})
-			.catch(() => {
-				current.innerText = "❌ Failed";
-				status.innerText = "❌ Could not fetch current firmware version.";
-			});
-	};
+  async function startOtaFromUrl(url) {
+    setStatus("Downloading latest firmware...");
+    setProgress(0, true);
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`Firmware download failed (${r.status})`);
+    const blob = await r.blob();
+    setStatus("Uploading firmware to device...");
+    await uploadBlobToDevice(blob, "firmware.bin");
+    setStatus("Firmware uploaded. Device rebooting...");
+    setTimeout(() => location.reload(), 6000);
+  }
 
-	reader.onerror = () => {
-		versionBox.style.display = "none";
-		uploadBtn.style.display = "none";
-		status.innerText = "❌ Failed to read selected firmware file.";
-	};
+  window.uploadFirmware = async function uploadFirmware() {
+    const fileInput = document.getElementById("otaFile");
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      setStatus("Please select a firmware file.");
+      return;
+    }
+    if (!ensureBatteryForOta(true)) {
+      setStatus("Upload canceled due to low battery.");
+      return;
+    }
+    try {
+      setStatus("Uploading firmware...");
+      setProgress(0, true);
+      await uploadBlobToDevice(file, file.name || "firmware.bin");
+      setStatus("Upload successful. Device rebooting...");
+      setTimeout(() => location.reload(), 6000);
+    } catch (err) {
+      setStatus(`Upload failed: ${err.message}`);
+    }
+  };
 
-	// Only read the first 4096 bytes — enough for string table
-	reader.readAsArrayBuffer(file.slice(0, 32768));
-};
+  window.onFirmwareFileSelected = function onFirmwareFileSelected() {
+    const fileInput = document.getElementById("otaFile");
+    const file = fileInput?.files?.[0];
+    const versionBox = document.getElementById("versionCompare");
+    const selected = document.getElementById("selectedVersion");
+    const current = document.getElementById("currentVersion");
+    const uploadBtn = document.getElementById("uploadBtn");
 
-function compareVersions(a, b) {
-	// Remove v/V prefix, trim, and ignore suffix like " Beta" or "Beta"
-	a = a.replace(/^v/i, '').split(/[^\d.]+/)[0].split('.').map(Number);
-	b = b.replace(/^v/i, '').split(/[^\d.]+/)[0].split('.').map(Number);
-
-	while (a.length < 3) a.push(0);
-	while (b.length < 3) b.push(0);
-
-	for (let i = 0; i < 3; ++i) {
-		if (a[i] > b[i]) return 1;
-		if (a[i] < b[i]) return -1;
-	}
-	return 0;
-}
-
-function checkForUpdates(showAlert = false) {
-	Promise.all([
-		fetch('/version').then(r => r.json()),
-		fetch('https://api.github.com/repos/elik745i/miniexco.v1/releases/latest').then(r => r.json())
-	])
-	.then(([local, github]) => {
-		const current = local.current.replace(/^v/, '');
-		const latest = github.tag_name.replace(/^v/, '');
-		const binUrl = github.assets.find(a => a.name.endsWith(".bin"))?.browser_download_url;
-
-		if (compareVersions(latest, current) > 0 && binUrl) {
-			if (confirm(`🆕 New firmware v${latest} available (current: v${current})\nDo you want to update now?`)) {
-				// ✅ Check battery before OTA
-				if (latestBatteryPercent < 50) {
-					alert(`❌ Battery too low (${latestBatteryPercent}%). Please charge above 50% to update.`);
-					return;
-				}
-				startOTA(binUrl);
-			}
-		} else if (showAlert) {
-			alert(`✅ Already on latest version (v${current})`);
-		}
-	})
-	.catch(err => {
-		console.error("Update check failed:", err);
-		if (showAlert) alert("❌ Failed to check for updates.");
-	});
-}
-
-
-function startOTA(url) {
-	fetch(url)
-		.then(r => {
-			if (!r.ok) throw new Error("Download failed");
-			return r.blob();
-		})
-		.then(blob => {
-			const formData = new FormData();
-			formData.append("update", blob, "firmware.bin");
-
-			const xhr = new XMLHttpRequest();
-			xhr.open("POST", "/ota/upload", true); // Use working endpoint
-
-			xhr.upload.onprogress = function(e) {
-				if (e.lengthComputable) {
-					const percent = (e.loaded / e.total) * 100;
-					console.log(`Uploading: ${percent.toFixed(1)}%`);
-				}
-			};
-
-			xhr.onload = function() {
-				if (xhr.status === 200) {
-					alert("✅ Firmware updated. Rebooting...");
-				} else {
-					alert("❌ Update failed: " + xhr.statusText);
-				}
-			};
-
-			xhr.send(formData);
-		})
-		.catch(err => {
-			console.error("OTA failed:", err);
-			alert("❌ OTA update failed: " + err.message);
-		});
-}
-
-window.loadOtaTab = function() {
-    // Reset status/progress fields
-    const status = document.getElementById("otaStatus");
-    if (status) status.textContent = "";
-
-    const progress = document.getElementById("otaProgress");
-    if (progress) {
-        progress.value = 0;
-        progress.style.display = "none";
+    if (!file) {
+      if (versionBox) versionBox.style.display = "none";
+      if (uploadBtn) uploadBtn.style.display = "none";
+      return;
     }
 
-    // Always fetch and show current FW version in both places!
-    fetch("/version")
-        .then(res => res.json())
-        .then(data => {
-            // Main display
-            const fwNum = document.getElementById("fwVersionNum");
-            if (fwNum) fwNum.innerText = data.current || "❓";
-            // OTA compare area
-            const current = document.getElementById("currentVersion");
-            if (current) current.innerText = data.current || "❓";
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const bin = new Uint8Array(e.target.result);
+      const text = new TextDecoder().decode(bin);
+      const allMatches = [...text.matchAll(/v\d+\.\d+\.\d{1,2}(?: ?[A-Za-z]+)?/gi)];
+      const selectedVersion = allMatches.length ? allMatches[allMatches.length - 1][0] : "? Unknown";
+      if (selected) selected.textContent = selectedVersion;
+
+      fetchLocalVersion()
+        .then((data) => {
+          if (current) current.textContent = data.current || "?";
+          if (versionBox) versionBox.style.display = "block";
+          if (uploadBtn) uploadBtn.style.display = "inline-block";
+          setStatus("");
         })
         .catch(() => {
-            const fwNum = document.getElementById("fwVersionNum");
-            if (fwNum) fwNum.innerText = "❌";
-            const current = document.getElementById("currentVersion");
-            if (current) current.innerText = "❌ Failed";
+          if (current) current.textContent = "Failed";
+          setStatus("Could not fetch current firmware version.");
         });
+    };
 
-    // Hide uploadBtn, clear selectedVersion, show versionCompare box if present
+    reader.onerror = () => {
+      if (versionBox) versionBox.style.display = "none";
+      if (uploadBtn) uploadBtn.style.display = "none";
+      setStatus("Failed to read selected firmware file.");
+    };
+    reader.readAsArrayBuffer(file.slice(0, 32768));
+  };
+
+  window.checkForUpdates = async function checkForUpdates(showAlert = false) {
+    try {
+      setStatus("Checking latest release on GitHub...");
+      const [local, github] = await Promise.all([fetchLocalVersion(), fetchLatestRelease()]);
+      const current = local.current || "0.0.0";
+      const latest = github.tag_name || "0.0.0";
+      const binUrl = chooseFirmwareAsset(github);
+      if (!binUrl) throw new Error("No OTA firmware asset found in latest release.");
+
+      if (compareVersions(latest, current) > 0) {
+        const proceed = confirm(
+          `New firmware ${latest} is available (current: ${current}).\nUpdate now?`
+        );
+        if (!proceed) {
+          setStatus("Update canceled.");
+          return;
+        }
+        if (!ensureBatteryForOta(true)) {
+          setStatus(`Battery too low (${currentBatteryPercent()}%).`);
+          return;
+        }
+        await startOtaFromUrl(binUrl);
+      } else {
+        setStatus(`Already on latest version (${current}).`);
+        if (showAlert) alert(`Already on latest version (${current}).`);
+      }
+    } catch (err) {
+      console.error("Update check failed:", err);
+      setStatus(`Update check failed: ${err.message}`);
+      if (showAlert) alert(`Failed to check for updates: ${err.message}`);
+    }
+  };
+
+  window.loadOtaTab = function loadOtaTab() {
+    setStatus("");
+    setProgress(0, false);
+
+    fetchLocalVersion()
+      .then((data) => {
+        const fwNum = document.getElementById("fwVersionNum");
+        const current = document.getElementById("currentVersion");
+        if (fwNum) fwNum.textContent = data.current || "?";
+        if (current) current.textContent = data.current || "?";
+      })
+      .catch(() => {
+        const fwNum = document.getElementById("fwVersionNum");
+        const current = document.getElementById("currentVersion");
+        if (fwNum) fwNum.textContent = "Failed";
+        if (current) current.textContent = "Failed";
+      });
+
     const versionBox = document.getElementById("versionCompare");
-    if (versionBox) versionBox.style.display = "block";
     const uploadBtn = document.getElementById("uploadBtn");
-    if (uploadBtn) uploadBtn.style.display = "none";
     const selectedVersion = document.getElementById("selectedVersion");
-    if (selectedVersion) selectedVersion.innerText = "-";
+    if (versionBox) versionBox.style.display = "block";
+    if (uploadBtn) uploadBtn.style.display = "none";
+    if (selectedVersion) selectedVersion.textContent = "-";
 
-    // Attach file input handler
     const fileInput = document.getElementById("otaFile");
     if (fileInput) fileInput.onchange = window.onFirmwareFileSelected;
-
-    // Attach upload button handler
     if (uploadBtn) uploadBtn.onclick = window.uploadFirmware;
-
-    // Optionally auto-fetch current version or check for update button
-    const checkBtn = document.getElementById("checkUpdateBtn");
-    if (checkBtn) checkBtn.onclick = () => checkForUpdates(true);
-};
+  };
+})();
