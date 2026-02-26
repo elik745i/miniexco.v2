@@ -1,0 +1,196 @@
+/* Mobile-specific overrides for MiniExco */
+html.is-mobile {
+  --controls-panel-width: min(92vw, 360px);
+  --controls-panel-width-px: 320px;
+  --controls-toggle-width: 48px;
+  --controls-overlay-gap: 0.6rem;
+  --joystick-size: min(68vw, 220px);
+  --joystick-knob-size: min(24vw, 56px);
+  --joystick-button-size: min(24vw, 64px);
+  --header-height: 48px;
+}
+
+html.is-mobile body {
+  font-size: 15px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+
+html.is-mobile .container.overlay-layout {
+  min-height: 100vh;
+}
+
+html.is-mobile .overlay-layout > .left {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--controls-panel-width);
+  max-width: 380px;
+  padding: 20px calc(18px + var(--controls-toggle-width)) 140px 20px;
+  background: rgba(8, 12, 20, 0.92);
+  border-right: 1px solid rgba(255, 255, 255, 0.16);
+  overflow-y: auto;
+  overflow-x: visible;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: 12px 0 26px rgba(0, 0, 0, 0.45);
+  z-index: 120;
+}
+
+html.is-mobile .overlay-layout > .left.collapsed {
+  box-shadow: none;
+}
+
+html.is-mobile .overlay-layout > .left::-webkit-scrollbar {
+  width: 8px;
+}
+
+html.is-mobile .overlay-layout > .left::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+}
+
+html.is-mobile .panel-toggle {
+  position: fixed;
+  top: 50%;
+  left: var(--mobile-toggle-left, 14px);
+  transform: translateY(-50%);
+  width: var(--controls-toggle-width);
+  min-height: 48px;
+  height: auto;
+  padding: 14px 10px;
+  border-radius: 0 14px 14px 0;
+  background: rgba(18, 24, 36, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: 6px 0 16px rgba(0, 0, 0, 0.35);
+  z-index: 200;
+  touch-action: manipulation;
+  will-change: left;
+}
+
+html.is-mobile #controlsPanel.collapsed {
+  background: transparent;
+  border-right-color: transparent;
+  box-shadow: none;
+}
+
+html.is-mobile #controlsPanel.collapsed .panel-toggle {
+  box-shadow: 6px 0 16px rgba(0, 0, 0, 0.35);
+}
+
+html.is-mobile .panel-toggle__icon::before {
+  border-top-width: 10px;
+  border-bottom-width: 10px;
+  border-right-width: 14px;
+}
+
+html.is-mobile #controlsPanel h3 {
+  font-size: 1.05rem;
+  margin: 1.3rem 0 0.7rem;
+}
+
+html.is-mobile #controlsPanel hr {
+  width: 100%;
+  margin: 1.2rem 0;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+html.is-mobile .control-button-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+html.is-mobile .control-button-grid__item--span2,
+html.is-mobile .control-button-grid__label {
+  grid-column: span 1;
+  text-align: center;
+}
+
+html.is-mobile .control-button-grid__label {
+  font-size: 0.95rem;
+}
+
+html.is-mobile .ctrlBtn {
+  padding: 12px 14px;
+  font-size: 1rem;
+}
+
+html.is-mobile .slidecontainer label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.95rem;
+}
+
+html.is-mobile .slidecontainer {
+  margin-bottom: 1.1rem;
+}
+
+html.is-mobile .slider {
+  height: 18px;
+}
+
+html.is-mobile .vertical-slider {
+  height: 160px !important;
+}
+
+html.is-mobile .joystick-control-wrapper {
+  width: 100%;
+  margin: 0 auto 1.4rem;
+}
+
+html.is-mobile .joystick-grid {
+  gap: 10px;
+}
+
+html.is-mobile .joystick-dir {
+  padding: 10px;
+  font-size: 0.95rem;
+}
+
+html.is-mobile .joystick-dir__icon {
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+
+html.is-mobile #joystickContainer {
+  margin: 0 auto;
+}
+
+html.is-mobile #camStatusOverlay,
+html.is-mobile .overlay-topright,
+html.is-mobile .overlay-bottomright {
+  font-size: clamp(13px, 3.3vw, 18px);
+}
+
+html.is-mobile .overlay-bottomright {
+  right: 16px;
+}
+
+html.is-mobile .overlay-bottomright .overlay-icon {
+  width: clamp(22px, 7vw, 30px);
+  height: clamp(22px, 7vw, 30px);
+}
+
+html.is-mobile #micBtn {
+  right: 16px !important;
+  bottom: 140px !important;
+}
+
+html.is-mobile #model3DWrap {
+  width: 220px !important;
+  height: 220px !important;
+  bottom: 90px !important;
+}
+
+html.is-mobile #imuOverlay {
+  bottom: 72px !important;
+  left: 12px !important;
+  transform: scale(0.88);
+  transform-origin: bottom left;
+}
+
+html.is-mobile #chargingOverlay {
+  left: 16px;
+  bottom: 48px;
+}

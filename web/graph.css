@@ -1,0 +1,144 @@
+#batteryPopupClose {
+  position: absolute;
+  right: 16px;
+  top: 10px;
+  background: none;
+  color: white;
+  border: none;
+  font-size: 1.7em;
+  width: auto;
+  height: auto;
+  min-width: unset;
+  min-height: unset;
+  cursor: pointer;
+  transition: color 0.16s;
+  padding: 0 5px;
+  line-height: 1;
+  z-index: 2;
+  box-shadow: none;
+  display: inline;
+}
+#batteryPopupClose:hover { color: #fa5; }
+
+#batteryPopupOverlay {
+  display: none;
+  position: fixed;
+  z-index: 99999;
+  left: 0; top: 0; width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.36);
+  align-items: center; justify-content: center;
+}
+#batteryPopupOverlay.active {
+  display: flex;
+}
+#batteryPopupContent {
+  background: #222;
+  color: #fff;
+  border-radius: 14px;
+  min-width: 480px;
+  min-height: 630px;
+  max-width: 98vw;
+  max-height: 99vh;
+  box-shadow: 0 6px 32px #0008;
+  padding: 30px 32px 18px 32px;
+  position: relative;
+  animation: popupIn 0.27s cubic-bezier(.61,1.64,.41,.8);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: visible;
+}
+#batteryPopupGraph {
+  width: 600px;
+  height: 600px;
+  max-width: 92vw;
+  margin: 10px 0 0 0;
+  background: #181818;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px #0007;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: visible;
+  position: relative;
+}
+#voltageChart {
+  width: 600px;
+  height: 400px;
+  background: #181818;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px #0007;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  padding-bottom: 15px;
+}
+#voltageEstimate {
+  margin-bottom: 8px;
+  min-height: 1.8em;
+  font-weight: 600;
+  font-size: 1.09em;
+  color: #fff;
+  white-space: pre-line;
+  text-align: left;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+#voltageButtonBar {
+  margin-top: 35px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  z-index: 1;
+  padding-bottom: 15px;
+}
+#voltageButtonBar button {
+  background: #222;
+  color: #fff;
+  border: 1.5px solid #555;
+  border-radius: 6px;
+  padding: 6px 17px;
+  font-size: 1.2em;
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s;
+  outline: none;
+}
+#voltageButtonBar button:hover {
+  background: #444;
+  color: #ffb300;
+  border-color: #ffb300;
+}
+#voltageCaption {
+  margin: 11px 0 0 0;
+  color: #ccc;
+  font-size: 1.01em;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  z-index: 1;
+}
+@media (max-width: 700px) {
+  #batteryPopupContent {
+    min-width: 97vw;
+    max-width: 99vw;
+    padding: 11px 1vw 8px 1vw;
+  }
+  #batteryPopupGraph {
+    width: 92vw;
+    min-width: 0;
+  }
+  #voltageChart {
+    width: 92vw;
+    height: 170px;
+    min-width: 0;
+  }
+}
+@keyframes popupIn {
+  0% { opacity: 0; transform: scale(0.92) translateY(30px);}
+  100% { opacity: 1; transform: scale(1) translateY(0);}
+}
+.u-legend.u-inline.u-live {
+  position: relative;
+  top: 50px;
+}

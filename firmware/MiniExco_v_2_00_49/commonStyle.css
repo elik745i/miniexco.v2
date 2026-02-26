@@ -1,0 +1,1282 @@
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    font-family: Arial;
+    background: white;
+    box-sizing: border-box;
+  }
+
+  .header {
+    height: 4vh; /* example value */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 4vh;
+    width: 100%;
+    background: black;
+    color: white;
+    text-align: center;
+    padding: 1vh;
+    font-size: 1vw;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: row;
+    height: calc(100vh - 4vh);  /* if you prefer fixed unit offset */
+    width: 100vw;
+    overflow: hidden;
+  }
+
+
+  .left {
+    flex: 1;
+    min-width: 200px;
+    background: white;
+    padding: 1vh;
+    overflow-y: auto;
+    max-height: 100%;
+    box-sizing: border-box;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .right {
+    flex: 4;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: black;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #cameraStream {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background-color: black;
+    z-index: 1;
+  }
+
+
+  .overlay,
+  .overlay-topright {
+    position: absolute;
+  }
+
+  .overlay-bottomright {
+    position: absolute;
+    cursor: pointer;
+    background: transparent !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    color: white !important;
+    font-size: 1.2vw;
+    text-shadow: 0 0 3px black;
+    z-index: 20;
+  }
+
+
+  .overlay {
+    top: 1vh;
+    left: 1vh;
+    z-index: 30;  /* was missing or too low */
+  }
+
+  .overlay-topright {
+    top: 1vh;
+    right: 1vh;
+    text-align: right;
+    z-index: 30;  /* elevate above drawing layers */
+  }
+
+  #statusOverlay {
+    z-index: 30;  /* make sure it's above canvas too */
+  }
+
+  .arrows {
+    font-size: 3vw;
+    color: grey;
+  }
+
+  td.button {
+    background-color: black;
+    border-radius: 10%;
+    box-shadow: 0.5vh 0.5vh #888;
+  }
+
+  td.button:active {
+    transform: translate(0.5vh, 0.5vh);
+    box-shadow: none;
+  }
+
+  .slidecontainer {
+    width: 100%;
+  }
+
+  .slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 2vh;
+    border-radius: 0.5vh;
+    background: #d3d3d3;
+    outline: none;
+    opacity: 0.7;
+    transition: opacity .2s;
+    cursor: grab;
+  }
+
+  .slider:hover {
+    opacity: 1;
+    cursor: grab;
+  }
+
+  .slider:active {
+    cursor: grabbing;
+  }
+
+  .slider::-webkit-slider-thumb,
+  .slider::-moz-range-thumb {
+    width: 4vh;
+    height: 4vh;
+    border-radius: 50%;
+    background: red;
+    cursor: grab;
+  }
+
+  .batt-green { color: #00ff00; }
+  .batt-orange { color: #ffaa00; }
+  .batt-red { color: #ff0000; }
+  .wifi-green { color: #00ff00; }
+  .wifi-orange { color: #ffaa00; }
+  .wifi-red { color: #ff0000; }
+
+  @keyframes flashRed {
+    0% { color: red; }
+    50% { color: white; }
+    100% { color: red; }
+  }
+
+  .batt-critical {
+    animation: flashRed 1s infinite;
+  }
+
+  body.dark { background: #111; color: white; }
+  .left.dark, .right.dark, .header.dark { background: #222; color: white; }
+
+  #chargingOverlay {
+    position: absolute;
+    top: 1vh;
+    right: 1vh;
+    width: 4vw;
+    height: 2vh;
+    border: 2px solid lime;
+    border-radius: 0.5vh;
+    overflow: hidden;
+    display: none;
+    background: #222;
+    z-index: 999;
+  }
+
+  #chargingFill {
+    height: 100%;
+    width: 0%;
+    background-color: lime;
+    animation: chargingAnim 1s linear infinite;
+  }
+
+  @keyframes chargingAnim {
+    0% { width: 0%; }
+    100% { width: 100%; }
+  }
+
+  #chargeIcon {
+    margin-left: 0.5vw;
+    font-size: 1.5vw;
+    font-weight: bold;
+    vertical-align: middle;
+    animation: fadeCharge 1.5s infinite;
+    transition: color 0.3s ease;
+  }
+
+  @keyframes fadeCharge {
+    0%   { opacity: 0.2; }
+    50%  { opacity: 1.0; }
+    100% { opacity: 0.2; }
+  }
+
+  @keyframes flashYellow {
+    0% { color: yellow; }
+    50% { color: white; }
+    100% { color: yellow; }
+  }
+
+  .temp-warning {
+    animation: flashYellow 1s infinite;
+    font-weight: bold;
+  }
+
+  .temp-critical {
+    animation: flashRed 1s infinite;
+    font-weight: bold;
+  }
+
+  @media (max-width: 800px), (max-height: 600px) {
+    .arrows {
+      font-size: 5vw;
+    }
+
+    .header {
+      font-size: 2vw;
+    }
+
+    .overlay, .overlay-topright {
+      font-size: 2vw;
+    }
+
+    td.button {
+      padding: 0.5vw;
+    }
+    .turn-indicator {
+      font-size: 12vw;
+    }
+  }
+
+  .tabButton {
+    background: #444;
+    color: white;
+    padding: 6px 12px;
+    font-size: 14px;
+    line-height: 18px;
+    border: none;
+    cursor: pointer;
+    border-radius: 5px 5px 0 0;
+    margin: 0 2px;
+  }
+
+  .tabButton.active {
+    background: #222;
+    color: white;
+    border: 2px solid white;
+    border-bottom: none;
+    outline: none;
+    position: relative;
+    z-index: 1;
+    padding: 6px 12px;
+    clip-path: polygon(
+      0 100%, 0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%
+    );
+    box-shadow: 0 0 0 2px white;
+  }
+
+  .slider.active {
+    box-shadow: 0 0 10px rgba(255, 0, 0, 0.7);
+  }
+
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 4px solid #ccc;
+    border-top-color: #00f;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  label span {
+    font-weight: normal;
+    margin-left: 6px;
+    color: yellow;
+  }
+
+  .blur {
+    filter: blur(5px);
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .tabButton:hover {
+    background: #666;
+    box-shadow: 0 0 5px white;
+  }
+
+
+/*-------------------------------Modal CSS--------------------------------------*/
+#settingsModal {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: #333;
+  color: white;
+  margin-bottom: 2vh;
+  padding: 20px;
+  border-radius: 20px;
+  z-index: 9999 !important;
+  transition:
+    opacity 0.24s cubic-bezier(.47,1.64,.41,.8),
+    box-shadow 0.2s,
+    transform 0.3s;
+  box-sizing: border-box;
+  min-width: 480px;
+  min-height: 660px !important;
+  max-width: 94vw;
+  max-height: 90vh;
+  overflow: hidden;
+  opacity: 0;                 /* Invisible by default */
+  pointer-events: none;       /* Prevent interaction while hidden */
+}
+#settingsModal.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+
+
+#settingsModal .modal-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;         /* fill modal! */
+  max-height: 84vh;     /* or a bit less than #settingsModal's max-height */
+  overflow: hidden;
+}
+
+#modalFrameShape {
+position: absolute;
+top: 0; left: 0;
+right: 0; bottom: 0; /* use this instead of width/height to track dynamic changes */
+z-index: 9998 !important;
+pointer-events: none;
+border: 4px solid white;
+border-radius: inherit; /* <-- Important for consistent rounded corners */
+transition: clip-path 0.2s ease; /* Optional for smooth shape change */
+}
+
+.tabContentWrapper {
+  position: relative;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-right: 6px;     /* so the scrollbar doesn't overlap content */
+  height: auto !important;
+}
+
+.tabContent {
+position: absolute;
+top: 0;
+left: 0;
+right: 0;
+opacity: 0;
+pointer-events: none;
+transition: opacity 0.3s ease;
+}
+
+.tabContent.active {
+position: relative;
+opacity: 1;
+pointer-events: auto;
+}
+
+/* Overlay for dynamically created modals */
+.modal {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  position: fixed;
+  left: 0; top: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.35);
+  z-index: 9999;
+}
+
+/* Content inside .modal overlay */
+.modal-content {
+  background: #222;
+  color: #fff;
+  padding: 24px 32px;
+  border-radius: 12px;
+  min-width: 320px;
+  max-width: 90vw;
+  box-shadow: 0 4px 32px #0008;
+  position: relative;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.modal-resize-handle {
+  position: absolute;
+  z-index: 1009;
+  background: transparent;
+  pointer-events: all;
+}
+/* Corners: Make them 22x22 and NOT overlap with sides */
+.modal-resize-ne,
+.modal-resize-nw,
+.modal-resize-se,
+.modal-resize-sw {
+  width: 22px;
+  height: 22px;
+}
+.modal-resize-nw { left: -10px; top: -10px; cursor: nwse-resize; }
+.modal-resize-ne { right: -10px; top: -10px; cursor: nesw-resize; }
+.modal-resize-se { right: -10px; bottom: -10px; cursor: nwse-resize; }
+.modal-resize-sw { left: -10px; bottom: -10px; cursor: nesw-resize; }
+/* Edges (no overlap with corners) */
+.modal-resize-n   { top: -6px; left: 50%; transform: translateX(-50%); height: 12px; width: 32px; cursor: ns-resize; }
+.modal-resize-s   { bottom: -6px; left: 50%; transform: translateX(-50%); height: 12px; width: 32px; cursor: ns-resize; }
+.modal-resize-e   { right: -6px; top: 50%; transform: translateY(-50%); width: 12px; height: 32px; cursor: ew-resize; }
+.modal-resize-w   { left: -6px; top: 50%; transform: translateY(-50%); width: 12px; height: 32px; cursor: ew-resize; }
+
+
+/*------------------------------------------------------------------------------------------------------------*/
+
+  @keyframes beaconFlash {
+    0%   { background-color: red; }
+    50%  { background-color: blue; }
+    100% { background-color: red; }
+  }
+
+  #beaconBtn.blinking {
+    animation: beaconFlash 0.6s infinite, emergencyPulse 1s infinite;
+    color: white;
+  }
+
+  #beaconBtn.beacon-active {
+    animation: beaconFlash 0.5s infinite;
+  }
+
+  #beaconBtn:active {
+    transform: scale(0.95);
+    box-shadow: 0 0 4px rgba(0,0,0,0.3);
+  }
+
+  /* Emergency button default style */
+  #emergencyBtn {
+    margin-top: 10px;
+    padding: 10px 20px;
+    background-color: yellow;
+    color: black;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    animation: none;
+  }
+
+  /* Emergency blinking effect */
+  @keyframes emergencyBlink {
+    0%   { background-color: yellow; opacity: 1; }
+    50%  { background-color: #ffcc00; opacity: 0.4; }
+    100% { background-color: yellow; opacity: 1; }
+  }
+
+  #emergencyBtn.blinking {
+    animation: emergencyBlink 0.8s infinite;
+  }
+
+  #emergencyBtn:active {
+    transform: scale(0.95);
+    box-shadow: 0 0 4px rgba(0,0,0,0.3);
+  }
+
+  /* Optional: Pulsing transform like Beacon */
+  @keyframes emergencyPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+  }
+
+  #emergencyBtn.blinking {
+    animation: emergencyBlink 0.8s infinite, emergencyPulse 1.2s infinite;
+  }
+
+  #ledToggleBtn {
+    width: 100%;
+    padding: 10px 20px;
+    background-color: #222;
+    color: white;
+    border: 2px solid white;
+    border-radius: 5px;
+    font-size: 16px;
+  }
+
+  #ledToggleBtn.active {
+    background-color: yellow;
+    color: black;
+    border: none;
+  }
+
+  .ctrlBtn {
+    width: 100%;
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 5px;
+    margin-top: 10px;
+    transition: transform 0.1s, background-color 0.2s;
+  }
+
+  .ctrlBtn:active {
+    transform: scale(0.95);
+  }
+
+  .ctrlBtn.dark {
+    background-color: #444;
+    color: white;
+  }
+
+  .ctrlBtn.light {
+    background-color: #ddd;
+    color: black;
+  }
+
+  .beaconStyle {
+    background-color: red;
+    color: white;
+  }
+
+  .emergencyStyle {
+    background-color: yellow;
+    color: black;
+  }
+
+  .turn-indicator {
+    position: absolute;
+    top: 50%;
+    font-size: 8vw;
+    color: yellow;
+    opacity: 0;
+    z-index: 15;
+    transform: translateY(-50%);
+    pointer-events: none;
+    background: transparent !important; /* force no background */
+    text-shadow: 1px 1px 3px black;     /* add soft outline for visibility */
+  }
+
+  .turn-indicator.blinking {
+    animation: flashTurn 1s infinite;
+
+  }
+
+
+  .turn-indicator.left {
+    left: 2vw;
+    z-index: 15;
+  }
+
+  .turn-indicator.right {
+    right: 2vw;
+    z-index: 15;
+  }
+
+  @keyframes flashTurn {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  #leftIndicator, #rightIndicator {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease;
+  }
+
+  #leftIndicator.visible, #rightIndicator.visible {
+    visibility: visible;
+    opacity: 1;
+  }
+
+  #laneOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .lane {
+    position: absolute;
+    bottom: 10px;
+    height: 50%;
+    width: 8px;
+    background: rgba(255, 255, 0, 0.7); /* semi-transparent yellow line */
+    opacity: 0.7;
+  }
+
+  .left-lane {
+    left: 5%;
+    transform: rotate(55deg);
+    transform-origin: bottom center;
+  }
+
+  .right-lane {
+    right: 5%;
+    transform: rotate(-55deg);
+    transform-origin: bottom center;
+  }
+
+  #drawPathBtn.active {
+    background-color: lime;
+    color: black;
+    font-weight: bold;
+  }
+
+  #drawingCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: -1; /* default: not blocking anything */
+    pointer-events: none;
+  }
+
+  #drawingOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 16;
+    pointer-events: none;
+  }
+
+  .ctrlBtn:hover {
+    transform: scale(1.03);
+    transition: transform 0.1s ease, background-color 0.2s ease;
+    cursor: pointer;
+  }
+
+  .overlay-bottomright:hover {
+    text-shadow: 0 0 5px white;
+  }
+
+  #startButton {
+    z-index: 25;
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: lime;
+    color: black;
+    font-weight: bold;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 1vw;
+    cursor: pointer;
+    text-shadow: 1px 1px 2px black;
+    transition: transform 0.2s, box-shadow 0.3s;
+    animation: pulseStart 1.6s infinite;
+  }
+
+  #startButton:hover {
+    box-shadow: 0 0 10px lime;
+    transform: scale(1.05);
+  }
+
+  #stopButton {
+    position: absolute;
+    background-color: red;
+    color: white;
+    font-weight: bold;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 1vw;
+    z-index: 25;
+    cursor: pointer;
+    text-shadow: 1px 1px 2px black;
+    transition: transform 0.2s, box-shadow 0.3s;
+    animation: pulseStop 1.6s infinite;
+  }
+
+  #stopButton:hover {
+    box-shadow: 0 0 10px red;
+    transform: scale(1.05);
+  }
+
+  @keyframes pulseStart {
+    0%, 100% { box-shadow: 0 0 6px lime; }
+    50% { box-shadow: 0 0 16px lime; }
+  }
+
+  @keyframes pulseStop {
+    0%, 100% { box-shadow: 0 0 6px red; }
+    50% { box-shadow: 0 0 16px red; }
+  }
+
+
+
+  .rotate-node {
+    fill: orange;
+    stroke: black;
+    stroke-width: 1px;
+    cursor: pointer;
+    pointer-events: auto;
+    r: 8;
+    z-index: 24;
+  }
+
+  .arrowhead {
+    fill: white;
+    stroke: black;
+    stroke-width: 1px;
+  }
+
+  .overlayBtn {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.1s ease-in-out;
+  }
+
+  .overlayBtn:active {
+    transform: scale(0.95);
+  }
+
+  /* Style for SVG drawn polyline path */
+  .drawn-path {
+    stroke: lime;
+    stroke-width: 10;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 20,10;          /* dash-gap */
+    animation: moveDash 1s linear infinite;
+    opacity: 1;
+  }
+
+  @keyframes moveDash {
+    0% { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -30; }
+  }
+
+  #imuWarning {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: red;
+    color: white;
+    font-weight: bold;
+    padding: 12px 20px;
+    border-radius: 8px;
+    z-index: 9999;
+    font-size: 16px;
+    text-align: center;
+    animation: blinkWarning 0.6s linear infinite;
+    box-shadow: 0 0 10px rgba(255,0,0,0.7);
+  }
+
+  @keyframes blinkWarning {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  #otaStatus {
+    margin-top: 10px;
+    color: white;
+  }
+  progress {
+    height: 20px;
+  }
+
+#joystickContainer {
+  width: 150px;
+  height: 150px;
+  background-color: #444;
+  border-radius: 10px;
+  position: relative;
+  margin: 20px auto;
+  user-select: none;
+  touch-action: none;
+  cursor: grab;
+}
+
+#joystickKnob {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  background: #888;
+  border-radius: 50%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: left 0.2s ease, top 0.2s ease;  /* 👈 Smooth transition */
+  user-select: none;
+  touch-action: none;
+  pointer-events: none; /* prevents knob from blocking pointerup */
+}
+
+#joystickContainer:hover {
+  background-color: #555;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+#joystickContainer:hover #joystickKnob {
+  background: #aaa;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.4);
+  transform: translate(-50%, -50%) scale(1.1);
+  transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.vertical-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 32px;
+  height: 200px;
+}
+
+#startButton:active, #stopButton:active {
+    transform: scale(0.95);
+    filter: brightness(0.9);
+}
+
+.sdFileTable > div {
+  padding: 4px 8px;
+  border-bottom: 1px solid #222;
+}
+.sdFileTable > div.selected {
+  background: #223377;
+}
+.sdFileTable > div:hover {
+  background: #222244;
+}
+
+.sdFileTable .selected {
+  background: #225 !important;
+  color: #fff;
+}
+
+.sd-toolbar-btn {
+  width: 42px;
+  height: 38px;
+  border: none;
+  margin: 0 2px;
+  border-radius: 8px;
+  background: #222c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, box-shadow .15s;
+  box-shadow: 0 1px 3px #0002;
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+}
+.sd-toolbar-btn svg {
+  display: block;
+  color: #555;
+  pointer-events: none;
+}
+.sd-btn-blue    { background: #e0f0ff; }
+.sd-btn-green   { background: #e3ffe0; }
+.sd-btn-yellow  { background: #fffbe0; }
+.sd-btn-red     { background: #ffe0e0; }
+.sd-btn-purple  { background: #ede0ff; }
+.sd-toolbar-btn:hover { filter: brightness(0.92); }
+
+
+#sd-file-list-container {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.camSettingsScroll {
+  max-height: 500px;         /* or adjust as needed for your modal */
+  overflow-y: auto;
+  padding-right: 6px;        /* Prevents scroll bar overlay on content */
+  margin-right: -6px;        /* Optional, tightens to right edge */
+}
+
+.wifi-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 6px;
+}
+.wifi-row button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 5px;
+  border: 1px solid #888;
+  background: #222;
+  color: #eee;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 16px;
+  transition: background 0.15s;
+}
+.wifi-row button:hover {
+  background: #333;
+}
+
+.media-file-item.active {
+  background: #222;
+  color: #ffc107;
+}
+
+#mediaPlayerModal {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 99999;
+}
+
+.media-player-content {
+  position: relative;
+  width: 100%;
+}
+
+#mediaFileListPanel {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  z-index: 50;
+  background: #17191c;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.5);
+  padding: 6px 0;
+  border: 1px solid #2e3137;
+  min-width: 200px;
+  max-width: 480px;
+  display: none;
+}
+
+#mediaFileListPanel.open {
+  display: block;
+  max-height: 33vh;
+  overflow-y: auto;
+}
+
+.media-player-modal .media-player-content {
+  padding: 0;
+}
+
+#mediaFileList {
+  padding: 6px 12px;
+  margin: 0;
+}
+
+.media-file-item {
+  white-space: nowrap;
+}
+
+/* --- Controls Bar --- */
+.media-player-controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  padding-bottom: 12px;
+  padding-top: 12px;
+}
+
+.media-player-progress-area {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 160px;
+  max-width: 680px;
+  gap: 14px;
+}
+
+.progress-track {
+  position: relative;
+  height: 26px;
+  background: linear-gradient(180deg, #4a94e8 0%, #2778ca 48%, #163c64 100%);
+  border-radius: 13px;
+  box-shadow:
+    0 2px 8px rgba(10,60,160,0.14),
+    0 1.5px 0.5px rgba(255,255,255,0.10) inset;
+  width: 100%;
+  min-width: 60px;
+  cursor: pointer;
+  border: 2.5px solid #0e2545;
+  overflow: visible;
+  margin-bottom: 0;
+}
+
+.progress-fill {
+  height: 100%;
+  /* Old: background: linear-gradient(90deg, #59cfff 0%, #2a8cf7 60%, #1048a0 100%); */
+  background: linear-gradient(90deg, #ae65ff 0%, #742fd4 70%, #4538a0 100%);
+  border-radius: 13px 0 0 13px;
+  width: 0%;
+  position: absolute;
+  top: 0; left: 0;
+  box-shadow: 0 0 10px 1px #ae65ff66 inset;
+  transition: width 0.18s cubic-bezier(.7,.2,.8,1.2);
+  z-index: 1;
+}
+
+
+.progress-thumb {
+  position: absolute;
+  top: -4px;
+  height: 30px;
+  width: 12px;
+  left: 0%;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  border: 2px solid #fff8;
+  transition: left 0.18s cubic-bezier(.7,.2,.8,1.2), background 0.15s;
+  z-index: 10;
+  cursor: pointer;
+}
+
+.progress-thumb:active {
+  box-shadow: 0 2px 10px #083c7aee;
+}
+
+/* Timestamp to the right of bar, vertically centered */
+.progress-time {
+  flex-shrink: 0;
+  margin-left: 12px;
+  color: #fff;
+  font-size: 1.16em;
+  font-weight: bold;
+  text-align: left;
+  min-width: 94px;
+  user-select: none;
+  letter-spacing: 0.02em;
+  background: none;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;   /* Keeps time visible, never blocks pointer events */
+  align-self: center;
+  z-index: 2;
+  text-shadow: 0 2px 8px #151b29bb, 0 1px 1px #000a;
+  position: static;
+  padding: 0;
+}
+
+/* Thumb covers time (optional effect) */
+.progress-time.covered {
+  color: #ffc107;
+  text-shadow: 1px 2px 6px #202020, 0 1px 8px #131b4a;
+  background: none;
+  border-radius: 0;
+}
+
+@media (max-width: 600px) {
+  .media-player-controls-bar { gap: 10px; }
+  .media-player-controls button { width: 36px; height: 36px; font-size: 18px; }
+  .progress-thumb { width: 22px; height: 22px; }
+  .progress-track { height: 13px; border-radius: 7px; }
+  .progress-time { font-size: 1em; margin-left: 7px; min-width: 68px; }
+}
+
+.media-btn-gap {
+  display: inline-block;
+  width: 30px; /* Adjust this for 1.5x the button width */
+}
+
+.media-toggle-btn {
+  transition: background 0.15s, color 0.15s;
+  border: 2px solid transparent;
+}
+
+.media-toggle-btn.active {
+  background: #256eff;
+  color: #fff;
+  border-color: #4abfff;
+  box-shadow: 0 2px 10px #1450c977;
+}
+
+@keyframes playingPulse {
+  0% { transform: scale(1); color: #fff;}
+  50% { transform: scale(1.20); color: #ae65ff;}
+  100% { transform: scale(1); color: #fff;}
+}
+.media-file-item .play-anim.playing {
+  animation: playingPulse 1s infinite;
+}
+
+.progress-song-title-outer {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 100%;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  z-index: 3; /* Above progress bar, below thumb */
+}
+
+.progress-song-title-wrap {
+  position: absolute;
+  left: 0; right: 0; top: 0; bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.progress-song-title {
+  display: inline-block;
+  white-space: nowrap;
+  color: #fff; /* brighter */
+  font-size: 1.15em;   /* slightly bigger */
+  font-weight: bold;
+  padding-left: 20px;
+  padding-right: 30px;
+  text-shadow:
+    0 2px 6px #0a0a1ecc,
+    0 0 6px #000c,
+    0 0 2px #321a;
+  letter-spacing: 0.04em;
+  opacity: 0.96;
+}
+
+
+/* Marquee animation, only active when set by JS */
+@keyframes scroll-title {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(var(--scroll-end, -50%)); }
+}
+
+/* The keyframes animate leftward translation for 1 full loop */
+@keyframes marquee-loop {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(var(--scroll-total, -200px)); }
+}
+
+
+#toast {
+    position: fixed;
+    bottom: 130px;
+    left: 50%;
+    transform: translateX(-50%);
+    min-width: 200px;
+    padding: 12px 24px;
+    border-radius: 8px;
+    color: #fff;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.5s;
+    z-index: 9999;
+    text-align: center;
+}
+
+#micBtn {
+  background: #444;
+  color: white;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.1s;
+  border-radius: 8px;
+  padding: 7px 15px;
+  box-shadow: 0 2px 6px #0006;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Remove blinking caret/cursor */
+  caret-color: transparent;
+  /* Optional: Prevent accidental selection */
+  user-select: none;
+  /* Remove focus outline (custom below) */
+  outline: none;
+  border: none;
+  cursor: pointer;
+}
+
+#micBtn.active, #micBtn.listening {
+  background: #16d16e;   /* Green when mic is on */
+  color: white;
+  animation: micPulse 1s infinite;
+}
+#micBtn:active {
+  transform: scale(0.97);
+}
+#micBtn:hover {
+  background: #16d16e55;
+  color: #fff700;
+  box-shadow: 0 0 12px #3ffb8c99;
+}
+
+/* Custom focus indicator: soft green glow */
+#micBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px #38ffa177, 0 2px 6px #0006;
+}
+
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 6px #15ff85; }
+  50% { box-shadow: 0 0 18px #23ffbb; }
+}
+
+/* SD Indexing Progress Modal */
+#sdReindexProgress {
+    position: fixed;
+    left: 50%;
+    top: 90px;
+    transform: translateX(-50%);
+    background: #232c38;
+    color: #eee;
+    padding: 28px 38px;
+    border-radius: 14px;
+    z-index: 9002;
+    box-shadow: 0 8px 36px #000c;
+    min-width: 300px;
+    text-align: center;
+    font-size: 18px;
+}
+#sdReindexBarContainer {
+    margin: 16px 0 12px 0;
+    width: 240px;
+    height: 32px;
+    background: none;
+    border-radius: 8px;
+    margin-left: auto;
+    margin-right: auto;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+}
+#sdReindexBar {
+    background: #3af;
+    height: 16px;
+    width: 0%;
+    transition: width 0.22s;
+    border-radius: 8px;
+    display: none;
+}
+#sdReindexSpinner {
+    display: none;
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+.sd-spinner {
+    width: 30px; height: 30px;
+    display: inline-block;
+}
+.sd-spinner svg {
+    animation: spin 0.9s linear infinite;
+    display: block;
+}
+@keyframes spin {
+    100% { transform: rotate(360deg);}
+}
+
+

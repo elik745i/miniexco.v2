@@ -1,0 +1,44 @@
+# Build artifacts
+build/
+build_cli/
+build_cli2/
+build_cli_check/
+build_cli_revert_stability/
+build_cli_step1/
+build_cli_step2/
+build_cli_step3/
+build_cli_step4/
+**/build_cli/
+**/build_cli2/
+**/build_cli_check/
+**/build_cli_revert_stability/
+**/build_cli_step1/
+**/build_cli_step2/
+**/build_cli_step3/
+**/build_cli_step4/
+*.bin
+*.elf
+*.map
+*.pyc
+*.o
+*.a
+*.tmp
+
+# VS Code cache
+.vscode/
+.arduino-vscode/
+.vscode/arduino.json
+.vscode/*.db
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Arduino CLI cache
+.arduino_cache/
+.arduino-output/
+media/
+recycle/
+manuals/
+telemetry/
+*.rar

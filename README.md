@@ -1,0 +1,135 @@
+MiniExco Robot Firmware
+=======================
+
+Firmware for the MiniExco rover running on ESP32-S3-SPK v1.0 (8 MB PSRAM / 16 MB flash). It drives camera, audio, SD storage, LEDs, IMU, and web UI for autonomous robotics and media playback.
+
+Cooling Requirement
+-------------------
+- The ESP32-S3 runs hot under Wi-Fi + camera + SD + audio load. Install **both** a metal heatsink on the ESP32-S3 and a low-profile 25 mm 5 V fan before long runs.
+- There is no built-in thermal protection; overheating can cause resets or damage.
+
+Hardware
+--------
+- ESP32-S3-SPK v1.0 with PSRAM
+- Dual microphones + DAC to mono speaker
+- OV2640 camera (MJPEG streaming, capture, video)
+- microSD card for media and telemetry
+- WS2812B LEDs
+- Optional BNO055 IMU
+
+Key Features
+------------
+- Web UI for driving, camera control, media playback, and settings
+- MJPEG stream + snapshots; pause/resume streaming
+- Telemetry: battery, charger, Wi-Fi, chip temp, FPS, IMU
+- SD media playback and online radio
+- Bluepad32 Bluetooth gamepad support (optional)
+- Home Assistant discovery + MQTT telemetry (configurable)
+- OTA updates (ElegantOTA)
+
+Recent Additions (v2.0.94)
+--------------------------
+- Media list pagination hardened for very large libraries (thousands of files): index-first paging, early-stop scanning, `hasMore` response, and frontend request timeout/error recovery to prevent pending hangs.
+- Camera streaming stability: start the port 81 server at boot even when the camera is disabled, larger HTTPD stack and socket/header limits, frame pacing (~25 fps cap) and merged MJPEG chunks to reduce Wi-Fi starvation, "Connection: close" and safer disconnect handling to avoid stuck pending streams.
+- Camera sensor init is now lazy: the stream server starts at boot, but the sensor only inits when streaming/enabling; settings apply auto-resumes the stream to avoid 503 gaps.
+- Web stack is split: a lightweight AP lobby starts first, with full routes/WebSocket attached on first page hit to keep boot heap higher.
+- Dock UDP link (default port `5005`) with discovery, pairing, and on-demand telemetry:
+  - Discovery (every ~5s until paired): rover broadcasts
+    ```json
+    { "type": "discover", "id": "MINIEXCO", "hw_id": "AA:BB:CC:DD:EE:FF" }
+    ```
+    Dock can listen for this to initiate pairing.
+  - Dock sends:
+    ```json
+    { "type": "pair_request", "id": "<dock rover id>", "hw_id": "<rover MAC>", "dock_id": "MINIEXCODOCK", "dock_mac": "<dock MAC>" }
+    ```
+    Rover replies:
+    ```json
+    { "type": "pair_ack", "id": "<same rover id>", "hw_id": "<same rover MAC>", "accepted": true }
+    ```
+  - After paired, dock requests data:
+    ```json
+    { "type": "data_request", "id": "<paired rover id>", "hw_id": "<paired rover MAC>", "dock_id": "MINIEXCODOCK", "dock_mac": "<dock MAC>" }
+    ```
+    Rover replies with current telemetry (includes STA RSSI if available):
+    ```json
+    {
+      "id": "MINIEXCO",
+      "hw_id": "AA:BB:CC:DD:EE:FF",
+      "battery_voltage": 7.52,
+      "charger_voltage": 5.01,
+      "charging_state": "YES",
+      "battery_percent": 83,
+      "rssi": -58
+    }
+    ```
+- Telemetry/state cached from the normal battery/charger sampling loop (1 Hz).
+  ```json
+  {
+    "id": "MINIEXCO",
+    "hw_id": "AA:BB:CC:DD:EE:FF",
+    "battery_voltage": 7.50,
+    "charger_voltage": 5.05,
+    "charging_state": "YES",
+    "battery_percent": 83
+  }
+  ```
+  `id` uses `S3_ID`; `hw_id` is the ESP32-S3 eFuse MAC (unique per board). Update `DOCK_UDP_PORT` in the sketch if your dock uses a different listener.
+
+Serial Commands (v2.0.94)
+-------------------------
+- `help` — list all serial commands.
+- `P<path>` — play WAV file from SD (e.g., `P /web/pcm/beep.wav`).
+- `F|B|L|R<num>` — legacy motor control (Forward/Backward/Left/Right, with speed/value).
+- `next`, `previous`, `play`, `stop`, `random`, `nextfolder` — track control.
+- `+`, `-` — volume up/down; `list` — print current playlist.
+- `heap` — system debug info; `wifi` — Wi-Fi debug info.
+- `serverreboot` — restart web server stack.
+- `reset`/`reboot` — reboot the ESP32.
+- `dockadv on|off` or `adv on|off` — enable/disable dock discovery.
+- `dockunpair` — clear saved dock pairing preferences.
+
+Revision History (highlights)
+-----------------------------
+- v2.0.94: Media library listing stabilized for large SD collections; robust paging and UI timeout recovery.
+- v2.0.90: Camera streaming hardened (HTTPD sizing, pacing, merged chunks, early server bring-up).
+- v2.0.87: Added UDP dock heartbeat with battery/charging + hardware ID.
+- v2.0.86: GPIOs configurable from config menu; web serial debug terminal.
+- v2.0.85: Mobile browser support; axis swap for 3D model; tweaks/optimizations.
+- v2.0.84: Reworked script/style loading; stream load at end; camera toggle resumes playback; fixed playlist/volume.
+- v2.0.83: Reduced client disconnects.
+- v2.0.82: Gzip index.html; 3D model display for tilt/pan.
+- v2.0.81: Expandable interface; draw-path horizon flow.
+- v2.0.80: Extended video feed.
+- v2.0.78: Added 3D models; reworked Wi-Fi connection logic.
+- v2.0.77: IP speak-up; AP/STA tuning; watchdog fixes.
+- v2.0.76: Fixed NTP blocking; added IP speech; AP animation.
+- v2.0.75: Wi-Fi priority across saved networks.
+- v2.0.74..v2.0.56: Streaming, telemetry CSV, media library, MQTT/HA, PSRAM optimizations, camera controls (see history in git for details).
+
+Build & Upload (Arduino / VS Code)
+----------------------------------
+1. Install ESP32 board support (esp32 2.0.14+).  
+2. Board: ESP32-S3-SPK / ESP32-S3 with PSRAM enabled; flash 16 MB; partition `app3M_fat9M_16MB`; CPU 240 MHz.  
+3. Open `MiniExco_v_2_00_93.ino`, set `port` in `.vscode/arduino.json`, click Verify/Upload.  
+4. If upload stalls at “Connecting…”, hold BOOT (GPIO0) while clicking Upload; release when “Connecting…” appears.
+
+Feature Switches (build-time)
+-----------------------------
+- `USE_BLUEPAD32`: 0=exclude BT gamepad, 1=include (default).
+- `DEBUG_SERIAL`: 0=quiet, 1=verbose serial logging.
+- `USE_PSRAM`: 1 to prefer PSRAM for large buffers (default).
+
+TODO
+----
+- BMP180 barometric readings in UI
+- Android APK + API
+- Path-following algorithms
+- Fix large file uploads
+- OLED battery icon artifacts
+- 3D model overlay follows IMU (tilt/turn + lights/animation)
+
+References
+----------
+- Bluepad32 docs: https://bluepad32.readthedocs.io/en/latest/  
+- Bluepad32 GitHub: https://github.com/ricardoquesada/bluepad32
