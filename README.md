@@ -8,6 +8,15 @@ Cooling Requirement
 - The ESP32-S3 runs hot under Wi-Fi + camera + SD + audio load. Install **both** a metal heatsink on the ESP32-S3 and a low-profile 25 mm 5 V fan before long runs.
 - There is no built-in thermal protection; overheating can cause resets or damage.
 
+Stability Notes (Heap / Watchdog)
+---------------------------------
+- System stability is highly sensitive to heap (SRAM) pressure.
+- If you customize features for personal use, continuously monitor heap load and keep it **below ~80%**.
+- Above that range, instability risk rises sharply: typically Wi-Fi services degrade first, then under heavier load the ESP can stall/hang.
+- To improve recovery behavior, enable watchdog auto-reset in:
+  - **Left expandable menu -> Settings -> Config -> WS Disconnect Reboot Watchdog**
+- Recommendation: keep this watchdog enabled for long unattended sessions.
+
 Hardware
 --------
 - ESP32-S3-SPK v1.0 with PSRAM
