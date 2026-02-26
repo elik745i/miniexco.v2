@@ -166,7 +166,7 @@ struct MQTTConfig;
 
 //--------------------------------------------------------------------FIRMWARE INFO----------------------------------------------------------------
 
-  #define FIRMWARE_VERSION "v2.0.99"
+  #define FIRMWARE_VERSION "v2.1.00"
 
 
   // AP credentials (global)
