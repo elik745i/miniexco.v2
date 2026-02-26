@@ -153,6 +153,7 @@ struct MQTTConfig;
   static void queueRadioPlay(const char* url);
 
   void otaUpdate();
+  static bool otaDownloadAndApplyFromUrl(const String& url, String& errorOut);
   void webServerReboot();
   void startLobbyServer();
   void serverStart();
@@ -1344,6 +1345,109 @@ unsigned long wifiConnectStartTime = 0;
       return body;
     }
     return String();
+  }
+
+  static bool otaDownloadAndApplyFromUrl(const String& url, String& errorOut) {
+    errorOut = "";
+
+    if (!(url.startsWith("https://") || url.startsWith("http://"))) {
+      errorOut = "invalid_url";
+      return false;
+    }
+
+    std::unique_ptr<WiFiClientSecure> secureClient;
+    std::unique_ptr<WiFiClient> plainClient;
+    WiFiClient* netClient = nullptr;
+
+    if (url.startsWith("https://")) {
+      auto* c = new WiFiClientSecure();
+      c->setInsecure();
+      secureClient.reset(c);
+      netClient = secureClient.get();
+    } else {
+      plainClient.reset(new WiFiClient());
+      netClient = plainClient.get();
+    }
+
+    if (!netClient) {
+      errorOut = "no_client";
+      return false;
+    }
+
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setConnectTimeout(8000);
+    http.setTimeout(15000);
+    http.setUserAgent("MiniExco/2.00 OTA-device-fetch");
+
+    if (!http.begin(*netClient, url)) {
+      errorOut = "http_begin_failed";
+      return false;
+    }
+
+    const int code = http.GET();
+    if (code < 200 || code >= 300) {
+      errorOut = String("http_") + String(code);
+      http.end();
+      return false;
+    }
+
+    const int contentLen = http.getSize();
+    WiFiClient* stream = http.getStreamPtr();
+    if (!stream) {
+      errorOut = "no_stream";
+      http.end();
+      return false;
+    }
+
+    if (!Update.begin((contentLen > 0) ? (size_t)contentLen : UPDATE_SIZE_UNKNOWN)) {
+      errorOut = String("update_begin_") + Update.errorString();
+      http.end();
+      return false;
+    }
+
+    uint8_t buf[2048];
+    size_t totalWritten = 0;
+    uint32_t lastDataMs = millis();
+
+    while (http.connected() && (contentLen < 0 || (int)totalWritten < contentLen)) {
+      const size_t avail = stream->available();
+      if (avail == 0) {
+        if (millis() - lastDataMs > 15000) break;
+        delay(1);
+        continue;
+      }
+
+      const size_t toRead = (avail > sizeof(buf)) ? sizeof(buf) : avail;
+      const int rd = stream->readBytes(buf, toRead);
+      if (rd <= 0) continue;
+
+      const size_t wr = Update.write(buf, (size_t)rd);
+      if (wr != (size_t)rd) {
+        errorOut = String("update_write_") + Update.errorString();
+        Update.abort();
+        http.end();
+        return false;
+      }
+
+      totalWritten += wr;
+      lastDataMs = millis();
+    }
+
+    http.end();
+
+    if (contentLen > 0 && totalWritten != (size_t)contentLen) {
+      errorOut = String("size_mismatch_") + String(totalWritten) + "/" + String(contentLen);
+      Update.abort();
+      return false;
+    }
+
+    if (!Update.end(true)) {
+      errorOut = String("update_end_") + Update.errorString();
+      return false;
+    }
+
+    return true;
   }
 
   static String rbFetchPath(const String& path, int* statusOut = nullptr) {
@@ -6848,6 +6952,126 @@ unsigned long wifiConnectStartTime = 0;
       resp->setCode(200);
       resp->setLength();
       request->send(resp);
+    });
+
+    // ---------- /ota/latest (GET) ----------
+    // Device-side GitHub latest release lookup for browser fallback.
+    server.on("/ota/latest", HTTP_GET, [](AsyncWebServerRequest *request){
+      auto* resp = new AsyncJsonResponse();
+      JsonObject root = resp->getRoot().to<JsonObject>();
+      root["ok"] = false;
+      root["repo"] = "elik745i/miniexco.v2";
+
+      int ghStatus = -1;
+      const String body = httpsGet("https://api.github.com/repos/elik745i/miniexco.v2/releases/latest", &ghStatus);
+      if (body.isEmpty()) {
+        root["error"] = "github_fetch_failed";
+        root["http_status"] = ghStatus;
+        resp->setCode(502);
+        resp->setLength();
+        request->send(resp);
+        return;
+      }
+
+      DynamicJsonDocument filter(512);
+      filter["tag_name"] = true;
+      filter["assets"][0]["name"] = true;
+      filter["assets"][0]["browser_download_url"] = true;
+
+      DynamicJsonDocument doc(12288);
+      const DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+      if (err) {
+        root["error"] = "json_parse_failed";
+        root["detail"] = err.c_str();
+        root["http_status"] = ghStatus;
+        resp->setCode(500);
+        resp->setLength();
+        request->send(resp);
+        return;
+      }
+
+      const String tagName = doc["tag_name"] | "";
+      String binUrl;
+      JsonArray assets = doc["assets"].as<JsonArray>();
+      for (JsonObject a : assets) {
+        const String n = a["name"] | "";
+        const String u = a["browser_download_url"] | "";
+        if (u.isEmpty()) continue;
+        if (n.endsWith(".ino.bin")) {
+          binUrl = u;
+          break;
+        }
+      }
+      if (binUrl.isEmpty()) {
+        for (JsonObject a : assets) {
+          const String n = a["name"] | "";
+          const String u = a["browser_download_url"] | "";
+          if (u.isEmpty()) continue;
+          if (n.endsWith(".bin") && n.indexOf("bootloader") < 0 && n.indexOf("partitions") < 0) {
+            binUrl = u;
+            break;
+          }
+        }
+      }
+
+      if (tagName.isEmpty() || binUrl.isEmpty()) {
+        root["error"] = "release_asset_not_found";
+        root["http_status"] = ghStatus;
+        resp->setCode(500);
+        resp->setLength();
+        request->send(resp);
+        return;
+      }
+
+      root["ok"] = true;
+      root["tag_name"] = tagName;
+      root["bin_url"] = binUrl;
+      root["source"] = "device";
+      root["http_status"] = ghStatus;
+      resp->setCode(200);
+      resp->setLength();
+      request->send(resp);
+    });
+
+    // ---------- /ota/update_from_url (POST/GET) ----------
+    // Device-side OTA downloader so updates can work even if browser can't reach GitHub.
+    server.on("/ota/update_from_url", HTTP_ANY, [](AsyncWebServerRequest *request){
+      String url;
+      if (request->hasParam("url", true)) {
+        url = request->getParam("url", true)->value();
+      } else if (request->hasParam("url")) {
+        url = request->getParam("url")->value();
+      }
+
+      auto* resp = new AsyncJsonResponse();
+      JsonObject root = resp->getRoot().to<JsonObject>();
+      root["ok"] = false;
+
+      if (url.isEmpty()) {
+        root["error"] = "missing_url";
+        resp->setCode(400);
+        resp->setLength();
+        request->send(resp);
+        return;
+      }
+
+      String otaErr;
+      const bool ok = otaDownloadAndApplyFromUrl(url, otaErr);
+      if (!ok) {
+        root["error"] = otaErr;
+        resp->setCode(500);
+        resp->setLength();
+        request->send(resp);
+        return;
+      }
+
+      root["ok"] = true;
+      root["rebooting"] = true;
+      root["message"] = "OTA applied, reboot scheduled";
+      resp->setCode(200);
+      resp->setLength();
+      request->send(resp);
+      shouldReboot = true;
     });
 
     // ---------- /list_saved_wifi (GET) ----------

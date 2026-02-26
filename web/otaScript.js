@@ -81,6 +81,32 @@
     return r.json();
   }
 
+  async function fetchLatestReleaseFromDevice() {
+    const r = await fetch("/ota/latest", { cache: "no-store" });
+    if (!r.ok) throw new Error(`Device fallback failed (${r.status})`);
+    const data = await r.json();
+    if (!data?.ok) throw new Error(data?.error || "Device fallback failed");
+    return {
+      tag_name: data.tag_name || "",
+      bin_url: data.bin_url || null,
+      source: data.source || "device",
+    };
+  }
+
+  async function fetchLatestReleaseWithFallback() {
+    try {
+      const github = await fetchLatestRelease();
+      return {
+        tag_name: github.tag_name || "",
+        bin_url: chooseFirmwareAsset(github),
+        source: "github-direct",
+      };
+    } catch (err) {
+      console.warn("Direct GitHub check failed, using device fallback:", err);
+      return fetchLatestReleaseFromDevice();
+    }
+  }
+
   function uploadBlobToDevice(blob, filename) {
     return new Promise((resolve, reject) => {
       const formData = new FormData();
@@ -116,6 +142,29 @@
     await uploadBlobToDevice(blob, "firmware.bin");
     setStatus("Firmware uploaded. Device rebooting...");
     setTimeout(() => location.reload(), 6000);
+  }
+
+  async function startOtaFromDeviceUrl(url) {
+    setStatus("Browser download failed, switching to device-side OTA...");
+    setProgress(0, true);
+    const form = new URLSearchParams();
+    form.set("url", url);
+    const r = await fetch("/ota/update_from_url", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      let msg = `Device-side OTA failed (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j?.error) msg = `${msg}: ${j.error}`;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    setStatus("OTA accepted by device. Rebooting...");
+    setTimeout(() => location.reload(), 8000);
   }
 
   window.uploadFirmware = async function uploadFirmware() {
@@ -186,10 +235,10 @@
   window.checkForUpdates = async function checkForUpdates(showAlert = false) {
     try {
       setStatus("Checking latest release on GitHub...");
-      const [local, github] = await Promise.all([fetchLocalVersion(), fetchLatestRelease()]);
+      const [local, release] = await Promise.all([fetchLocalVersion(), fetchLatestReleaseWithFallback()]);
       const current = local.current || "0.0.0";
-      const latest = github.tag_name || "0.0.0";
-      const binUrl = chooseFirmwareAsset(github);
+      const latest = release.tag_name || "0.0.0";
+      const binUrl = release.bin_url || null;
       if (!binUrl) throw new Error("No OTA firmware asset found in latest release.");
 
       if (compareVersions(latest, current) > 0) {
@@ -204,7 +253,12 @@
           setStatus(`Battery too low (${currentBatteryPercent()}%).`);
           return;
         }
-        await startOtaFromUrl(binUrl);
+        try {
+          await startOtaFromUrl(binUrl);
+        } catch (browserOtaErr) {
+          console.warn("Browser OTA path failed, trying device-side OTA:", browserOtaErr);
+          await startOtaFromDeviceUrl(binUrl);
+        }
       } else {
         setStatus(`Already on latest version (${current}).`);
         if (showAlert) alert(`Already on latest version (${current}).`);
