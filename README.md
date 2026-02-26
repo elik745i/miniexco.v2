@@ -27,6 +27,28 @@ Key Features
 - Home Assistant discovery + MQTT telemetry (configurable)
 - OTA updates (ElegantOTA)
 
+Recent Additions (v2.0.98)
+--------------------------
+- Widget system refactor and UX pass:
+  - draggable widget frames with context actions
+  - `gravityDrag` mode and plain `Drag` mode (no gravity settle)
+  - default/delete/restore behavior integrated with View tab
+- View tab improvements:
+  - drag-to-add widget flow
+  - miniature previews linked to live widgets
+  - overlap/snap/gravity flags and gravity strength controls
+  - improved scroll behavior and control layout polish
+- Battery/heap/psram expandable telemetry panel improvements:
+  - inline battery history graph flow hardened
+  - expand/collapse edge handling near screen bottom
+  - temporary lift/restore behavior for nearby widgets
+- Frontend packaging cleanup:
+  - extracted widget subsystem from `commonScript.js` into `web/widgetScript.js` for maintainability
+- Memory optimizations and stability:
+  - continued heap (SRAM) pressure reduction across UI/runtime paths
+  - expanded PSRAM-first strategy for large/temporary data paths
+  - net effect: major runtime stability improvements under sustained stream + telemetry + UI interaction load
+
 Recent Additions (v2.0.94)
 --------------------------
 - Media list pagination hardened for very large libraries (thousands of files): index-first paging, early-stop scanning, `hasMore` response, and frontend request timeout/error recovery to prevent pending hangs.
@@ -76,7 +98,7 @@ Recent Additions (v2.0.94)
   ```
   `id` uses `S3_ID`; `hw_id` is the ESP32-S3 eFuse MAC (unique per board). Update `DOCK_UDP_PORT` in the sketch if your dock uses a different listener.
 
-Serial Commands (v2.0.94)
+Serial Commands (v2.0.98)
 -------------------------
 - `help` — list all serial commands.
 - `P<path>` — play WAV file from SD (e.g., `P /web/pcm/beep.wav`).
@@ -91,6 +113,7 @@ Serial Commands (v2.0.94)
 
 Revision History (highlights)
 -----------------------------
+- v2.0.98: Widget framework/refactor, gravity/drag modes, View tab controls and previews, expandable panel behavior fixes, memory stability improvements.
 - v2.0.94: Media library listing stabilized for large SD collections; robust paging and UI timeout recovery.
 - v2.0.90: Camera streaming hardened (HTTPD sizing, pacing, merged chunks, early server bring-up).
 - v2.0.87: Added UDP dock heartbeat with battery/charging + hardware ID.
@@ -111,7 +134,7 @@ Build & Upload (Arduino / VS Code)
 ----------------------------------
 1. Install ESP32 board support (esp32 2.0.14+).  
 2. Board: ESP32-S3-SPK / ESP32-S3 with PSRAM enabled; flash 16 MB; partition `app3M_fat9M_16MB`; CPU 240 MHz.  
-3. Open `MiniExco_v_2_00_93.ino`, set `port` in `.vscode/arduino.json`, click Verify/Upload.  
+3. Open `MiniExco_v_2_00_98.ino`, set `port` in `.vscode/arduino.json`, click Verify/Upload.  
 4. If upload stalls at “Connecting…”, hold BOOT (GPIO0) while clicking Upload; release when “Connecting…” appears.
 
 Feature Switches (build-time)
@@ -133,3 +156,10 @@ References
 ----------
 - Bluepad32 docs: https://bluepad32.readthedocs.io/en/latest/  
 - Bluepad32 GitHub: https://github.com/ricardoquesada/bluepad32
+- ESP32-S3-SPK v1.0 3D model: https://grabcad.com/library/esp32-spk-v1-0-1
+
+Project Media (Placeholders)
+----------------------------
+- Rover 3D models: _placeholder (to be added)_
+- Project overview: _placeholder (to be added)_
+- YouTube video/demo: _placeholder (to be added)_
