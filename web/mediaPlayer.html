@@ -1,0 +1,57 @@
+<div id="mediaPlayerModal" class="media-player-modal" style="display:none;">
+  <div class="media-player-content">
+    <!-- File List Panel (keep as is, above this) -->
+	<div id="mediaFileListPanel" style="overflow-y:auto;">
+	  <div id="mediaFileListPaging" style="display:flex;justify-content:space-between;align-items:center;padding:4px 6px;">
+		<span id="mediaFilePageInfo" style="flex:1;text-align:center;color:#ccc;font-size:0.95em;"></span>
+	  </div>
+	  <div id="mediaFileList" class="media-file-list">
+		<!-- Populated by JS -->
+	  </div>
+	  <div id="mediaFileListSummary"></div>
+	</div>
+
+
+    <!-- CONTROLS + PROGRESS BAR INLINE -->
+    <div class="media-player-controls-bar">
+		<div class="media-player-controls">
+		  <button id="mediaFilesBtn">📂 Files</button>
+		  <span class="media-btn-gap"></span>
+		  <button id="mediaLoopBtn" title="Loop" class="media-toggle-btn">🔁</button>
+		  <button id="mediaShuffleBtn" title="Shuffle" class="media-toggle-btn">🔀</button>
+		  <span class="media-btn-gap"></span>
+		  <button id="mediaPrevBtn">⏮️</button>
+		  <button id="mediaPlayBtn">▶️</button>
+		  <button id="mediaPauseBtn">⏸️</button>
+		  <button id="mediaStopBtn">⏹️</button>
+		  <button id="mediaNextBtn">⏭️</button>
+		  <input id="mediaVolume" type="range" min="0" max="1" step="0.01" value="1" style="vertical-align:middle;width:70px;">
+		</div>
+
+			<!-- Radio stations -->
+			<div class="media-radio-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+				<select id="radioCountrySelect" class="media-radio-select" title="Country" style="max-width:220px;"></select>
+				<select id="radioSelect"         class="media-radio-select" title="Station" style="min-width:260px;max-width:420px;"></select>
+				<button id="radioBrowserBtn" title="Play in browser">▶️</button>
+				<button id="radioDeviceBtn"  title="Play on device">🔊</button>
+			</div>
+
+
+      <div class="media-player-progress-area" style="display: flex; align-items: center;">
+				<div id="progressTrack" class="progress-track" style="flex:1 1 0%; position:relative;">
+					<div id="progressFill" class="progress-fill"></div>
+					<div id="progressThumb" class="progress-thumb"></div>
+					<div id="progressSongTitleWrap" class="progress-song-title-wrap">
+					<div id="progressSongTitle" class="progress-song-title"></div>
+					</div>
+			  </div>
+        <div id="progressTime" class="progress-time" style="margin-left: 14px; min-width: 90px;">00:00 / 00:00</div>
+      </div>
+    </div>
+
+    <div id="mediaPlayerMain" style="margin: 1em 0;">
+      <audio id="mediaPlayerAudio" style="width:100%;display:none;"></audio>
+      <video id="mediaPlayerVideo" style="width:100%;display:none;max-height:40vh;"></video>
+    </div>
+  </div>
+</div>

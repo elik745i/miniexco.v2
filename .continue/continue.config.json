@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "title": "DeepSeek Coder (Ollama)",
+      "provider": "ollama",
+      "model": "deepseek-coder:33b",
+      "contextLength": 8192,
+      "completionParams": { "temperature": 0.2 }
+    }
+  ],
+  "tabAutocompleteModel": {
+    "provider": "ollama",
+    "model": "deepseek-coder:33b",
+    "completionParams": { "temperature": 0.2 }
+  },
+  "embeddingsProvider": {
+    "provider": "ollama",
+    "model": "nomic-embed-text"
+  },
+  "allowAnonymousTelemetry": false
+}

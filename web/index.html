@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>MiniExco</title>
+<script>
+  (function bootstrapHead(){
+    var ts = window.__ASSET_TS__ || Date.now();
+    window.__ASSET_TS__ = ts;
+    window.__MAIN_STYLE_TS__ = ts;
+
+    var head = document.head || document.documentElement;
+    var link = document.createElement('link');
+    link.id = 'mainStyle';
+    link.rel = 'stylesheet';
+    link.href = '/main.css?v=' + ts;
+    link.dataset.baseHref = '/main.css';
+    head.appendChild(link);
+
+    function isMobileDevice() {
+      var userAgent = (navigator.userAgent || '').toLowerCase();
+      var mobilePattern = /android|iphone|ipad|ipod|windows phone|blackberry|bb10|mobile/;
+      var uaIsMobile = mobilePattern.test(userAgent);
+      var viewportIsSmall = false;
+
+      if (typeof window.matchMedia === 'function') {
+        viewportIsSmall = window.matchMedia('(max-width: 900px)').matches;
+      } else {
+        var width = window.innerWidth || document.documentElement.clientWidth || 0;
+        viewportIsSmall = width > 0 && width <= 900;
+      }
+
+      return uaIsMobile || viewportIsSmall;
+    }
+
+    function setMobileState(shouldEnableMobile) {
+      window.__IS_MOBILE__ = shouldEnableMobile;
+
+      var root = document.documentElement;
+      if (root && root.classList) {
+        root.classList.toggle('is-mobile', shouldEnableMobile);
+      }
+
+      var mobileLink = document.getElementById('mobileStyle');
+      if (shouldEnableMobile) {
+        if (!mobileLink) {
+          mobileLink = document.createElement('link');
+          mobileLink.id = 'mobileStyle';
+          mobileLink.rel = 'stylesheet';
+          mobileLink.href = '/mobile.css?v=' + ts;
+          mobileLink.dataset.baseHref = '/mobile.css';
+          head.appendChild(mobileLink);
+        }
+      } else if (mobileLink && mobileLink.parentNode) {
+        mobileLink.parentNode.removeChild(mobileLink);
+      }
+    }
+
+    function evaluateMobileState() {
+      setMobileState(isMobileDevice());
+    }
+
+    evaluateMobileState();
+
+    if (typeof window.matchMedia === 'function') {
+      var mobileQuery = window.matchMedia('(max-width: 900px)');
+      if (typeof mobileQuery.addEventListener === 'function') {
+        mobileQuery.addEventListener('change', evaluateMobileState);
+      } else if (typeof mobileQuery.addListener === 'function') {
+        mobileQuery.addListener(evaluateMobileState);
+      }
+    } else {
+      window.addEventListener('resize', evaluateMobileState);
+    }
+
+    var importMap = document.createElement('script');
+    importMap.type = 'importmap';
+    importMap.textContent = JSON.stringify({
+      imports: {
+        three: '/web/three.module.min.js?v=' + ts
+      }
+    });
+    head.appendChild(importMap);
+  })();
+</script>
+<noscript>
+  <link rel="stylesheet" href="/main.css">
+  <link rel="stylesheet" href="/mobile.css" media="(max-width: 900px)">
+</noscript>
+	<style>
+		/* temporary debug outline */
+		.debug-outline { outline: 2px solid red; outline-offset: 2px; }
+		.debug-outline > canvas { border: 1px dashed rgba(0,255,0,0.7); }	
+	</style>	
+</head>
+<body class="noselect">
+
+<div id="splashScreen" style="
+  position:fixed;
+  inset:0;
+  background:#000;
+  z-index:99999;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  transition:opacity 2s;
+">
+  <span id="splashText" style="
+    color:white;
+    font-size:4vw;
+    font-family:sans-serif;
+    font-weight:bold;
+    letter-spacing:0.25em;
+    opacity:0;
+    transition:opacity 0.7s;
+  ">
+    MINIEXCO.
+  </span>
+</div>
+
+<div id="mainContent">
+  <div class="container overlay-layout">
+
+    <div id="controlsPanel" class="left controls-panel">
+      <button
+        id="controlsToggleBtn"
+        class="panel-toggle"
+        type="button"
+        aria-expanded="true"
+        aria-controls="controlsPanel"
+        aria-label="Hide controls panel">
+        <span class="panel-toggle__icon" aria-hidden="true"></span>
+      </button>
+
+      <div class="control-button-grid">
+        <button onclick="toggleSettingsModal()" class="ctrlBtn control-button-grid__item">
+          Settings
+        </button>
+
+        <button id="cameraToggleBtn" class="ctrlBtn cameraStyle control-button-grid__item" onclick="toggleCamera()">
+          Camera: ON
+        </button>
+
+        <div class="control-button-grid__label control-button-grid__item--span2">Light Controls</div>
+
+        <button id="emergencyBtn" onclick="toggleEmergency()" class="ctrlBtn emergencyStyle control-button-grid__item">
+          Emergency
+        </button>
+
+        <button id="beaconBtn" onclick="toggleBeacon()" class="ctrlBtn beaconStyle control-button-grid__item">
+          Beacon
+        </button>
+
+        <button id="ledToggleBtn" onclick="toggleLed()" class="ctrlBtn control-button-grid__item control-button-grid__item--span2">
+          LED: OFF
+        </button>
+      </div>
+
+      <hr>
+      <h3>Bucket & AUX Control</h3>
+      <div class="slidecontainer">
+        <label for="Bucket">Bucket:<span id="BucketValue">140</span></label>
+        <input type="range" min="0" max="180" value="140" class="slider" id="Bucket" oninput='sendButtonInput("Bucket", this.value); updateSliderValue("Bucket")'>
+      </div>
+      <div class="slidecontainer">
+        <label for="AUX">AUX Arm: <span id="AUXValue">150</span></label>
+        <input type="range" min="0" max="180" value="150" class="slider" id="AUX" oninput='sendButtonInput("AUX", this.value); updateSliderValue("AUX")'>    
+      </div>
+
+      <h3>Arm Motor Control</h3>
+      <div class="arm-control">
+        <label for="armVerticalSlider" class="arm-control__label">Arm: <span id="armVerticalValue">0</span></label>
+        <div class="arm-control__inputs">
+          <input
+            type="range"
+            min="-255"
+            max="255"
+            value="0"
+            class="vertical-slider arm-control__slider"
+            id="armVerticalSlider">
+          <div class="arm-control__buttons">
+            <button type="button" class="joystick-dir joystick-dir--up arm-step" data-arm-step="up" aria-label="Arm up jog">
+              <span class="joystick-dir__icon" aria-hidden="true">Arm Up</span>
+            </button>
+            <button type="button" class="joystick-dir joystick-dir--down arm-step" data-arm-step="down" aria-label="Arm down jog">
+              <span class="joystick-dir__icon" aria-hidden="true">Arm Down</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- MOVEMENT CONTROLS -->
+      <h3>2D Joystick Control</h3>
+      <div class="joystick-control-wrapper">
+        <div class="joystick-grid" role="group" aria-label="Directional drive controls">
+          <div class="joystick-grid__spacer" aria-hidden="true"></div>
+          <button type="button" class="joystick-dir joystick-dir--up" data-direction="forward" aria-label="Drive forward">
+            <span class="joystick-dir__icon" aria-hidden="true">Forward</span>
+          </button>
+          <div class="joystick-grid__spacer" aria-hidden="true"></div>
+
+          <button type="button" class="joystick-dir joystick-dir--left" data-direction="left" aria-label="Drive left">
+            <span class="joystick-dir__icon" aria-hidden="true">Left</span>
+          </button>
+          <div id="joystickContainer">
+            <div id="joystickKnob"></div>
+          </div>
+          <button type="button" class="joystick-dir joystick-dir--right" data-direction="right" aria-label="Drive right">
+            <span class="joystick-dir__icon" aria-hidden="true">Right</span>
+          </button>
+
+          <div class="joystick-grid__spacer" aria-hidden="true"></div>
+          <button type="button" class="joystick-dir joystick-dir--down" data-direction="backward" aria-label="Drive backward">
+            <span class="joystick-dir__icon" aria-hidden="true">Backward</span>
+          </button>
+          <div class="joystick-grid__spacer" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <img id="cameraStream" src="">
+      <canvas id="drawingCanvas" style="position:absolute; top:0; left:0; z-index:15; pointer-events:none;"></canvas>
+      <svg id="drawingOverlay" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:16; pointer-events:none;"></svg>
+
+      <div id="camStatusOverlay" style="top: 40px; display:none; position:absolute; color:white; z-index:10;">
+        <div class="spinner"></div>
+        <div style="margin-top: 8px;">Camera Unavailable</div>
+      </div>
+
+      <div class="overlay-topright memory-meters memory-meters-frame" id="memoryMetersWrap" style="top: 12px; right: 12px;">
+        <div class="telemetry-meter telemetry-meter--static" id="batteryMeter">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">BATTERY</span>
+            <span id="batteryText" class="telemetry-meter__value">Batt: 0% (0.00V)</span>
+            <span id="chargeIcon" style="display:none;">CHG</span>
+            <span id="batteryPct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="batteryBarFill" class="telemetry-meter__fill"></div></div>
+        </div>
+        <div class="telemetry-meter telemetry-meter--static" id="wifiMeter">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">WIFI</span>
+            <span id="wifiText" class="telemetry-meter__value">WiFi: 0%</span>
+            <span id="wifiPct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="wifiBarFill" class="telemetry-meter__fill"></div></div>
+        </div>
+        <div class="telemetry-meter telemetry-meter--static" id="fpsMeter">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">FPS</span>
+            <span id="fpsText" class="telemetry-meter__value">FPS: 0</span>
+            <span id="fpsPct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="fpsBarFill" class="telemetry-meter__fill"></div></div>
+        </div>
+        <div class="telemetry-meter telemetry-meter--static" id="uptimeMeter">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">UPTIME</span>
+            <span id="uptimeText" class="telemetry-meter__value">Uptime: 0m, Temp: 0.0C</span>
+            <span id="uptimePct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="uptimeBarFill" class="telemetry-meter__fill"></div></div>
+        </div>
+        <div class="telemetry-meter telemetry-meter--interactive" id="heapOverlay">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">HEAP</span>
+            <span id="heapText" class="telemetry-meter__value">0/0 KB</span>
+            <span id="heapPct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="heapBarFill" class="telemetry-meter__fill"></div></div>
+          <div class="telemetry-meter__details" id="heapDetails">
+            <div class="telemetry-meter__details-title">Heap Breakdown</div>
+            <div id="heapDetailList" class="telemetry-meter__details-list"></div>
+            <div class="telemetry-meter__details-title">Tasks (Stack Watermark)</div>
+            <div id="heapTaskList" class="telemetry-meter__details-list"></div>
+          </div>
+        </div>
+        <div class="telemetry-meter telemetry-meter--interactive" id="psramOverlay">
+          <div class="telemetry-meter__head">
+            <span class="telemetry-meter__label">PSRAM</span>
+            <span id="psramText" class="telemetry-meter__value">0/0 KB</span>
+            <span id="psramPct" class="telemetry-meter__pct">0%</span>
+          </div>
+          <div class="telemetry-meter__bar"><div id="psramBarFill" class="telemetry-meter__fill"></div></div>
+          <div class="telemetry-meter__details" id="psramDetails">
+            <div class="telemetry-meter__details-title">PSRAM Breakdown</div>
+            <div id="psramDetailList" class="telemetry-meter__details-list"></div>
+            <div class="telemetry-meter__details-title">Tasks (Stack Watermark)</div>
+            <div id="psramTaskList" class="telemetry-meter__details-list"></div>
+          </div>
+        </div>
+      </div>
+      
+      <div id="photoCaptureBtn" 
+          class="overlay-bottomright" 
+          style="bottom: 350px; right: 10px;"
+          onclick="capturePhoto()">
+        <svg class="icon-camera" viewBox="0 0 24 24">
+          <rect class="camera-body" x="3" y="7" width="18" height="12" rx="3"/>
+          <circle class="camera-lens" cx="12" cy="13" r="4"/>
+          <rect class="camera-bar" x="8" y="4" width="8" height="4" rx="2"/>
+        </svg>
+        Capture Photo
+      </div>
+
+      <div id="videoCaptureBtn" 
+          class="overlay-bottomright" 
+          style="bottom: 300px; right: 10px;"
+          onclick="toggleVideoRecording()">
+        <svg class="icon-record" viewBox="0 0 24 24">
+          <circle class="record-outer" cx="12" cy="13" r="7"/>
+          <circle class="record-inner" cx="12" cy="13" r="3"/>
+        </svg>
+        Record Video
+      </div>
+
+      <div id="statusOverlay" style="position:absolute; top:5px; right:5px; color:white; background:black; padding:5px; font-size:14px;"></div>
+
+      <div id="pathControlButtons" style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:999; pointer-events: none;"></div>
+
+      <div id="drawPathBtn"
+          class="overlay-bottomright"
+          style="bottom: 250px; right: 10px;"
+          onclick="toggleDrawMode()">
+        <svg class="overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/>
+          <path fill="currentColor" d="M20.71 7.04a1 1 0 0 0 0-1.41L18.37 3.3a1 1 0 0 0-1.41 0L15.13 5.13l3.75 3.75 1.83-1.83z"/>
+        </svg>
+        <span class="overlay-label">Draw Path</span>
+      </div>
+      <div id="wipePathBtn"
+          class="overlay-bottomright"
+          style="bottom: 200px; right: 10px;"
+          onclick="clearDrawing()">
+        <svg class="overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M5 12l2-6h10l2 6z"/>
+          <path fill="currentColor" d="M6 14h12l-3 4H9z"/>
+          <rect x="4" y="18" width="16" height="2" fill="currentColor"/>
+        </svg>
+        <span class="overlay-label">Wipe</span>
+      </div>
+      <div class="overlay-bottomright"
+          style="bottom: 150px; right: 10px;"
+          onclick="toggleLaneOverlay()">
+        <svg class="overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="5" y="3" width="3" height="18" rx="1" fill="currentColor"/>
+          <rect x="16" y="3" width="3" height="18" rx="1" fill="currentColor"/>
+          <rect x="11" y="3" width="2" height="3" fill="currentColor"/>
+          <rect x="11" y="9" width="2" height="3" fill="currentColor"/>
+          <rect x="11" y="15" width="2" height="3" fill="currentColor"/>
+        </svg>
+        <span class="overlay-label">Toggle Lane</span>
+      </div>
+      <div id="micBtn"
+          class="overlay-bottomright"
+          style="bottom: 100px; right: 170px;"
+          onclick="toggleMic()"
+          title="Mic: listen to the robot audio (press to enable/disable)">
+        <svg class="overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor"/>
+          <path fill="currentColor" d="M5 10h2a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V19h3v2H8v-2h3v-2.07A7 7 0 0 1 5 10z"/>
+        </svg>
+        <span id="micIcon" class="overlay-label">Mic</span>
+      </div>
+      <div id="mediaPlayerBtn"
+          class="overlay-bottomright"
+          style="bottom: 100px; right: 10px;"
+          onclick="toggleMediaPlayer()">
+        <svg class="overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/>
+          <polygon points="10,8 16,12 10,16" fill="currentColor"/>
+        </svg>
+        <span class="overlay-label">Media Player</span>
+      </div>
+<div id="chargingOverlay">
+        <div id="chargingFill"></div>
+      </div>
+      <!-- Turn Signal Overlays -->
+      <div id="leftIndicator" class="turn-indicator left">&#x25C0;</div>
+      <div id="rightIndicator" class="turn-indicator right">&#x25B6;</div>
+
+      <div id="laneOverlay">
+        <div class="lane left-lane"></div>
+        <div class="lane right-lane"></div>
+      </div>
+
+      <!-- IMU Overlay (bottom-left corner) -->
+      <div id="imuOverlay" style="position:absolute; bottom:100px; left:10px; z-index:20; color:white; font-family:sans-serif; pointer-events:none;">
+        <div style="display:flex; gap:10px;">
+          <div style="text-align:center;">
+            <canvas id="tiltSphere" width="80" height="80" style="display:block;"></canvas>
+            <div style="font-size:14px;">
+              <div id="rollText">Roll: --- deg</div>
+              <div id="pitchText">Pitch: --- deg</div>
+            </div>
+          </div>
+
+          <div style="text-align:center;">
+            <canvas id="compassCanvas" width="80" height="80" style="display:block;"></canvas>
+            <div id="headingText" style="font-size:14px;">Heading: --- deg</div>
+          </div>
+
+          <div style="text-align:center;">
+            <canvas id="tempCanvas" width="30" height="80" style="display:block;"></canvas>
+            <div id="imuTemp" style="font-size:14px;">Temp: -- deg C</div>
+          </div>
+        </div>
+
+        <div id="magText" style="margin-top:4px; font-size:13px;">Mag: [--, --, --]</div>
+      </div>
+
+			<!-- 3D model (bottom-center) -->
+			<div id="model3DWrap"
+					 style="position:absolute; bottom:100px; left:50%; transform:translateX(-50%);
+									width:280px; height:280px; z-index:99999; pointer-events:none;">
+				<canvas id="model3D" width="280" height="280"></canvas>
+			</div>
+
+    </div>
+
+  </div>
+
+  <div id="toast" style="visibility:hidden; min-width:250px; margin-left:-125px;
+    background-color:#333; color:#fff; text-align:center; border-radius:2px;
+    padding:16px; position:fixed; z-index:2147483647; left:50%; bottom:80px;
+    font-size:17px; opacity:0; transition:opacity 0.5s ease-in-out;">
+  </div>
+</div>
+<script src="/commonScript.js?v=<%= Date.now() %>"></script>
+</body>
+</html>
+
+
+
+
+
+

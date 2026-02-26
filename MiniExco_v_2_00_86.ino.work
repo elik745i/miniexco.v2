@@ -1,0 +1,3282 @@
+/***************************************************************
+ *    MiniExco Robot Firmware
+ *    Hardware: ESP32-S3-SPK v1.0 (8MB PSRAM / 16MB flash)
+ *    - Dual microphones, DAC to mono speaker
+ *    - microSD card slot, OV2640 camera, WS2812B LEDs
+ *    - Designed for autonomous robotics & media playback
+ *
+ *    ⚠️  CRITICAL HARDWARE REQUIREMENT: HEATSINK **AND ACTIVE COOLING**!
+ *    ------------------------------------------------------------------
+ *    This project runs the ESP32-S3 at extremely high load (Wi-Fi, camera, SD, audio).
+ *    >>> YOU MUST INSTALL BOTH:
+ *        1. A METAL HEATSINK on the ESP32-S3 chip (with thermal adhesive or pad)
+ *        2. A 25mm x 25mm (or similar) LOW-PROFILE 5V COOLING FAN for active airflow
+ *    ------------------------------------------------------------------
+ *    Failure to provide **both** passive (heatsink) and active (fan) cooling will result in:
+ *      - Overheating, Wi-Fi/network failures, random resets, severe instability, or PERMANENT DAMAGE.
+ *      - There is NO built-in hardware or automatic thermal protection in ESP32-S3!
+ *    ------------------------------------------------------------------
+ *    [Edit this notice only if you confirm a heatsink AND a cooling fan are properly installed!]
+ *
+ *    Circuit diagrams, webserver files, and wiring drawings:
+ *      [add link here]
+ *    Video tutorials:
+ *      [add link here]
+ *
+ *    Revision History:
+                   TO DO:
+                    b. implement BMP180 barometric pressure sensor readings in UI
+                    c. Start working on android APK and API for it.
+         v2.0.78: Added 3D Models into the folder
+                  Reworked WiFi connection logics           
+         v2.0.77: Finetuning IP speakup and AP/STA modes
+                  Troubleshooting WiFi down and watchdog reboot
+         v2.0.76: Fixed NPT Time blocking the loop
+                  Added IP speaking Capability
+                  Added animation for AP mode
+                  Fine tuning the code.
+         v2.0.75: Implemented wifi connection priorities in saved multible networks.
+
+         v2.0.74: Implement adaptive stream quality settings toggled through cam settings
+                  Tweaked IMU chick check to be only in setup, otherwise playing audio hickups
+                  Added Wifi AP deletion from prefs, otherwise keeps connecting to first one.
+                  Tweaked frontend with show password eye
+                  Tweaked front and backend with delete saved wifi AP
+ 
+         v2.0.73: Made IMU chip optional not to block code from execution when its not present.
+                  Added throttle to camera quality settings to help with heap allocation
+                  Untie lights and media playing from websocket connection quality to avoid hickups
+                  Pause streaming and playing media when loading settings modal, then on close resume
+
+         v2.0.72: Cleaning Code from unused references
+                  Implemented watchdog on crient disconnect Server Stuck/Dead
+                  Videofeed for home assistant discovery added over MDNS
+                  Settings → Devices & Services → Add Integration → search “MJPEG IP Camera”
+                  camera:
+                    - platform: mjpeg
+                      name: MiniExco Rover
+                      mjpeg_url: http://miniexco-s3-v1-01.local:81/stream
+                      still_image_url: http://miniexco-s3-v1-01.local/capture
+                  AP password change from UI
+
+         v2.0.71: Serialize SD access
+                  Fix telemetry kept logging
+                  Added online radio channels to media panel
+                  
+         v2.0.70: Tweak Controls tab
+                  Telemetry recording logics tweaks
+                  Added Bluepad32 switch in frontpage
+
+        v2.0.69: Controls assignment for both keyboard and joypad
+                 Modal window tab logics tweaks
+                 İncomplete file uploads rebooting and corrupting existing files fix
+
+        v2.0.68: Added camera stream start/stop button in interface
+                 Implement async Json
+                 SDLock to prevent collisions
+                 Optimized code for webserverdisconnects
+ *      v2.0.67: Optimize PSRAM usage; move variables/functions to PSRAM to free Heap on ESP32-S3.
+ *      v2.0.66: OLED fixes; system sound queue; mic streaming; voltage filtering; MQTT Home Assistant discovery.
+ *      v2.0.64: Heap optimizations; playlist loading optimized; cleaned up sketch; custom partition; frontend version in MQTT.
+ *      v2.0.63: Split frontend CSS for index/settings; fixed stream hangs; added firmware version to MQTT.
+ *      v2.0.62: BLE joystick PWM; MQTT for Home Assistant; serial debug flag; more fixes.
+ *      v2.0.61: Home Assistant support.
+ *      v2.0.60: System WAV sound playback (boot, Wi-Fi, etc.); frontend/backend system sound volume.
+ *      v2.0.59: Media/video playback (fullscreen/windowed, controls); auto reindex after recording.
+ *      v2.0.58: Media library in settings tab.
+ *      v2.0.57: Video/photo capture to SD; camera model in settings; apply cam settings on boot; file manager path fixes.
+ *      v2.0.56: Telemetry logging to CSV; overlay battery voltage charts.
+ *
+ *    TODO List:
+ *      - Path following algorithms
+ *      - Fix large file uploads
+ *      - OLED battery icon artifacts
+ *      - 3D Model in overlay moving with tilt/turn and flash lights and animate
+ *
+ ***************************************************************/
+
+/* Bluepad32 documentation: https://bluepad32.readthedocs.io/en/latest/
+                            https://github.com/ricardoquesada/bluepad32
+*/
+
+// ============================================================================
+// Feature switches (override with -D in build flags if you like)
+// ----------------------------------------------------------------------------
+// USE_BLUEPAD32 - Controlled by frontend Settings in Control tab switch - update v2.0.70
+//   0 = exclude Bluepad32 gamepad support (saves flash/RAM, faster compile)
+//   1 = include Bluepad32 (needs Bluepad32 library + BT enabled)
+//   Tip: set to 0 unless you actually use a BT gamepad.
+//
+// DEBUG_SERIAL
+//   0 = silence most DBG_PRINT/DBG_PRINTF calls
+//   1 = enable verbose serial logging (requires Serial.begin in setup())
+//   Tip: keep 1 while developing; switch to 0 for production.
+//
+// USE_PSRAM
+//   0 = use internal heap only for large buffers (frame buffers, media queues)
+//   1 = prefer PSRAM for large buffers (much more space; slightly slower access)
+//   Notes:
+//     - Board must actually have PSRAM. We’ll detect at runtime and fall back.
+//     - Good for camera frames, audio buffers, MJPEG chunking, JSON docs.
+// ============================================================================
+
+//-----------------------------------------------------------------------GLOBALS---------------------------------------------------------------------
+
+
+//-------------------------------------------------------------------GLOBAL FLAGS------------------------------------------------------------------
+  #define DEBUG_SERIAL   1
+  #define USE_PSRAM      1
+
+//-----------------------------------------------------------------------LIBs----------------------------------------------------------------------
+  // --- Core / Arduino ---
+  #include <Arduino.h>
+  #include <WiFi.h>
+  #include <WiFiClient.h>
+  #include <HTTPClient.h>
+  #include <time.h>
+
+  // --- NVS / Preferences ---
+  #include <Preferences.h>
+
+  // --- Filesystems / Storage ---
+  #include <FS.h>
+  #include <SD.h>
+  #include <SPI.h>
+  #include <sys/stat.h>
+  #include <utime.h>
+  #include <mbedtls/sha256.h>  //upload file verification
+
+  // Optional fast FS stats (used only if present)
+  #if __has_include(<sys/statvfs.h>)
+    #include <sys/statvfs.h>
+  #endif
+
+  // --- Async web stack ---
+  #include <AsyncTCP.h>                 // required by ESPAsyncWebServer on ESP32
+  #include <ESPAsyncWebServer.h>        // (patched per your note)
+  #include <ArduinoJson.h>
+  #include <AsyncJson.h>
+  #include <ESPmDNS.h>
+
+  // --- Networking helpers ---
+  #include <ESPmDNS.h>
+  #include <ElegantOTA.h>               // (patched per your note)
+  #include "esp_wifi.h"
+  #include "esp_sntp.h"
+
+  // --- MQTT ---
+  #include <PubSubClient.h>
+
+  // --- Camera / Display / Sensors ---
+  #include "esp_camera.h"
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SSD1306.h>
+  #include <Adafruit_BNO055.h>
+  #include <Adafruit_NeoPixel.h>
+  #include <Wire.h>
+
+  // auto-throttle quality/size if heap dips
+  #include "esp_heap_caps.h"
+  extern "C" void requestCameraParams(framesize_t fs, int quality);
+  extern volatile int frameCount;
+
+  // --- Audio / I2S / LEDC ---
+  #include <Audio.h>                    // ESP32-audioI2S
+  #include "driver/i2s.h"
+  #include "driver/ledc.h"
+
+  // --- System / FreeRTOS / PSRAM ---
+  #include "esp_system.h"
+  #include "esp_task_wdt.h"
+  #include <esp32-hal-psram.h>
+  #include <esp_heap_caps.h>
+  #include "freertos/FreeRTOS.h"
+  #include "freertos/task.h"
+  #include <semphr.h>
+
+
+  //#if USE_BLUEPAD32
+    #include <Bluepad32.h>
+  //#endif
+
+  // --- STL / utilities ---
+  #include <map>
+  #include <string>
+  #include <vector>
+  //#include <iostream>
+  //#include <sstream>
+
+
+//--------------------------------------------------------------------FIRMWARE INFO----------------------------------------------------------------
+
+  #define FIRMWARE_VERSION "v2.0.78"
+
+  #define S3_ID "MINIEXCO_S3_V1_02"
+
+
+  // AP credentials (global)
+  #define AP_PASSWORD_DEFAULT "12345678"   // 8..63 chars; change to your default
+  String g_apPassword = AP_PASSWORD_DEFAULT;  // mutable so you can change it from UI later
+
+//---------------------------------------------------------------------Preferences-----------------------------------------------------------------
+
+  Preferences preferences, prefs, wifiPrefs, camPrefs, keymapPrefs, joymapPrefs, imuPrefs, uiPrefs, oledPrefs, camEnablePrefs;
+
+//---------------------------------------------------------------------NPT Tıme--------------------------------------------------------------------
+
+  int myTimezone = +3; // For US Eastern (UTC-5)
+  long gmtOffset_sec = myTimezone * 3600;
+  bool timeIsValid = false;
+  unsigned long lastTimeCheck = 0;
+
+
+//----------------------------------------------------------------Globals for MQTT-----------------------------------------------------------------
+  volatile bool mqttNeedsReconnect = false;
+  unsigned long mqttTelemetryInterval = 5000; // ms, default 1 seconds
+  unsigned long lastMqttTelemetry = 0;
+
+  bool mqttDiscoveryPublished = false;
+
+  bool mqttConnected = false;
+  String mqttLastError = "";
+
+  struct MQTTConfig {
+    bool enable;
+    String host;
+    int port;
+    String user;
+    String pass;
+    String topic_prefix;
+  };
+
+  MQTTConfig mqttCfg;
+
+  WiFiClient wifiClient;
+  PubSubClient mqtt(wifiClient);
+
+  String getMqttPrefix() {
+    loadMqttConfig(); // Ensure latest config
+    String p = mqttCfg.topic_prefix;
+    while (p.endsWith("/")) p.remove(p.length()-1);
+    if (p.length()) p += "/";
+    return p;
+  }
+
+
+
+//-----------------------------------------------------Globals for system sounds to play on event--------------------------------------------------
+  unsigned long lastLowBatteryBeep = 0;
+  bool lowBatteryAlertActive = false;
+  static bool wasCharging = false;              //for charging
+  static bool chargingCompletePlayed = false;   // For chargeComplete.wav
+  static bool endChargingPlayed = false;        // For endCharging.wav
+  static bool wasFullyCharged = false;          // For 100% detection
+  bool sirenPlaying = false;
+
+  volatile bool isSystemSoundPlaying = false;
+  String lastPlayedFile = "";
+  unsigned long lastPlayedTime = 0;
+
+  // >>> KEEP ONLY ONE of these; delete any duplicate definition elsewhere <<<
+  unsigned long soundRepeatDelay = 1000; // or 250 if you prefer; just one
+
+  // >>> Queue size: 24 is fine; delete any later #ifndef/#define that redefines it <<<
+  #define MAX_SYSTEM_SOUND_QUEUE 24
+  String systemSoundQueue[MAX_SYSTEM_SOUND_QUEUE];
+  uint8_t queueHead = 0, queueTail = 0;
+
+  // ---- Minimal exclusivity (NEW) ----
+  volatile bool ss_exclusive = false;   // while true, any new non-IP enqueues are dropped
+  volatile bool ss_allow     = false;   // temporarily true only while we enqueue the IP sequence
+
+  static bool ss_fastMode    = false;   // enable faster chaining once lead-in clip has played
+  static bool ss_useSamTts   = true;    // prefer onboard SAM TTS for IP announcements
+  static bool ss_samSpeechPending = false;
+  static bool ss_samSpeechIsSta   = false;
+  static bool ss_samActive        = false;
+  static IPAddress ss_samSpeechIp;
+  static String ss_samSpeechText;
+  static IPAddress ss_lastSpokenIp;
+  static bool ss_lastSpokenIsSta = false;
+  static bool ss_hasSpokenAnyIp = false;
+  static bool ss_finalSpeechArmed = false;
+  static bool ss_finalSpeechIsSta = false;
+  static uint32_t ss_finalSpeechAtMs = 0;
+  static IPAddress ss_finalSpeechIp;
+  static const uint32_t SS_AP_FINAL_DELAY_MS = 8000;
+  static const uint32_t SS_STA_FINAL_DELAY_MS = 1500;
+  static AudioOutputI2S* ss_samOutput = nullptr;
+  static ESP8266SAM*    ss_samVoice  = nullptr;
+
+  static const char* SS_DIGIT_WORDS[10] = {
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"
+  };
+
+  static String samWordsForDigits(const String& digits) {
+    String out;
+    out.reserve(digits.length() * 6);
+    for (size_t i = 0; i < digits.length(); ++i) {
+      char c = digits[i];
+      if (c < '0' || c > '9') continue;
+      if (out.length() > 0) out += ' ';
+      out += SS_DIGIT_WORDS[c - '0'];
+    }
+    return out;
+  }
+
+  static String buildSamIpPhrase(const IPAddress& ip, bool isSta) {
+    String phrase;
+    phrase.reserve(96);
+    phrase += isSta ? "station ip " : "access point ip ";
+    for (int i = 0; i < 4; ++i) {
+      if (i > 0) phrase += " dot ";
+      phrase += samWordsForDigits(String(ip[i]));
+    }
+    return phrase;
+  }
+
+  static float samGainFromVolume(int vol) {
+    vol = constrain(vol, 0, 21);
+    float normalized = static_cast<float>(vol) / 21.0f;
+    float gain = normalized * 0.6f;  // keep SAM around ~15% of max output
+    return constrain(gain, 0.05f, 0.6f);
+  }
+
+
+// -------------------------------------------------------------- Globals for recording -----------------------------------------------------------
+  volatile bool  videoRecording  = false;
+  volatile bool  videoTaskActive = false;
+  TaskHandle_t   videoTaskHandle = nullptr;
+
+//---------------------------------------------------------Telemetry Logging Global Variables------------------------------------------------------
+
+  bool imuPresent = false;
+  unsigned long telemetrySampleInterval = 1000; // e.g. 1000ms = 1 second
+  const size_t TELEMETRY_FILE_MAX_SIZE = 10 * 1024 * 1024; // 10 MB each telemetry data file size
+  String currentTelemetryFile = "/telemetry/telemetry_01.csv";
+
+  const char* TELEMETRY_CSV_HEADER =
+    "datetime,timestamp,voltage,temp,charger,imu_euler_x,imu_euler_y,imu_euler_z,"
+    "imu_mag_x,imu_mag_y,imu_mag_z,imu_temp,fps";
+
+  struct TelemetrySample {
+    unsigned long timestamp = 0;
+    int batteryPercent = 0;
+    float voltage = 0;
+    float charger = 0;
+    int wifi = 0;
+    float temp = 0;
+    int fps = 0;
+    float imu_euler_x = 0;
+    float imu_euler_y = 0;
+    float imu_euler_z = 0;
+    float imu_mag_x = 0;
+    float imu_mag_y = 0;
+    float imu_mag_z = 0;
+    float imu_temp = 0;
+    // Add other fields if needed!
+  };
+
+
+  TelemetrySample currentSample;
+
+
+//------------------------------------------------------------------Bluepad32 Globals--------------------------------------------------------------
+
+  //#if USE_BLUEPAD32
+    #define STICK_DEADZONE 100
+    #define DPAD_UP     0x01
+    #define DPAD_DOWN   0x02
+    #define DPAD_LEFT   0x04
+    #define DPAD_RIGHT  0x08
+
+    ControllerPtr myControllers[BP32_MAX_GAMEPADS];
+  //#endif
+
+
+//--------------------------------------------------------------------Audio Globals----------------------------------------------------------------
+
+  Audio audio;
+
+  // ---- Folders to scan for music----
+  // --- Supported audio file extensions ---
+  const char* supportedExtensions[] = {
+    ".mp3", ".wav", ".aac", ".flac", ".ogg", ".mod", ".mid", ".midi", ".opus"
+  };
+  const int numSupportedExtensions = sizeof(supportedExtensions)/sizeof(supportedExtensions[0]);
+
+  // Helper to check file extension
+  bool hasSupportedExtension(const String& name) {
+    for (int i = 0; i < numSupportedExtensions; ++i) {
+      if (name.endsWith(supportedExtensions[i])) return true;
+    }
+    return false;
+  }
+
+  // --- Folders to scan for audio files ---
+  std::vector<const char*> mediaFolders = {
+    "/media/mp3",
+  };
+
+
+  bool loopMode = false;
+  bool shuffleMode = false;
+  bool isPaused = false;
+  bool playbackStarted = false;
+
+
+  // ---------------- System-sound scheduler ----------------
+
+//--------------------------------------------------------------------Reindex globals--------------------------------------------------------------
+
+  int reindexTotal = 0;
+  bool reindexCounting = false; // true while counting files
+  bool reindexReadyToIndex = false; // true when ready to start indexing
+
+  volatile bool pendingReindex = false;
+  String reindexPath = "/";
+  int reindexCount = 0;
+
+//----------------------------------------------------------------------File Upload----------------------------------------------------------------
+  namespace sdweb {             // keeps the symbol local to this file
+    struct UploadCtx {
+      String uploadPath;        // final path
+      String tmpPath;           // temp path
+      File   uploadFile;        // open temp handle
+      String error;             // non-empty => failed
+      size_t bytesWritten = 0;
+      size_t bytesSinceYield = 0;     // for periodic flush/yield
+
+      // Optional integrity check
+      bool verifySha = false;
+      mbedtls_sha256_context sha;
+      String expectedShaHex;          // 64-hex (lowercase)
+      uint8_t digest[32];             // computed
+    };
+
+  }
+  using sdweb::UploadCtx;
+
+  volatile bool isSdUploadInProgress = false;  //used in app_httpd.cpp
+  volatile bool isStreaming = true;            //used in app_httpd.cpp
+
+//----------------------------------------------------------------------Serial Debug---------------------------------------------------------------
+  /* As pins 19, 43 and 44 is used to control DRV8833 when debut is enabled, you will see serial but will be unable to control motors */
+
+  #ifdef DEBUG_SERIAL
+    #define DBG_PRINT(...)    do { if (DEBUG_SERIAL) Serial.print(__VA_ARGS__); } while(0)
+    #define DBG_PRINTLN(...)  do { if (DEBUG_SERIAL) Serial.println(__VA_ARGS__); } while(0)
+    #define DBG_PRINTF(...)   do { if (DEBUG_SERIAL) Serial.printf(__VA_ARGS__); } while(0)
+
+    #define PRINT_HEAP(step) \
+      DBG_PRINTF("[HEAP][%s] Free: %u  MinFree: %u  MaxAlloc: %u\n", step, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
+  #endif
+
+//-----------------------------------------------------------Reboot Watchdog on Webserver Disconnect-----------------------------------------------
+
+  // --- WebServer (WebSocket) watchdog ---
+  static volatile uint32_t lastWebActivityMs = 0;     // last time we saw a WS connect/data/pong
+  static volatile uint32_t lastWsDisconnectMs = 0;    // last time a WS disconnected
+  static volatile uint16_t wsActiveClients = 0;       // current WS client count
+  static bool hadAnyClientSinceBoot = false;          // becomes true after first WS connect
+
+  // Tunables
+  static const uint32_t WS_REBOOT_TIMEOUT_MS = 5000;  // 5 seconds with no WS clients
+  static const uint32_t WS_REBOOT_GRACE_MS   = 30000; // 30s after boot, don't reboot
+
+  // If you already have these, keep them. Otherwise remove the 'extern' lines.
+  extern volatile bool isSdUploadInProgress;
+  extern volatile bool isStreaming;   // set to true while /stream is serving frames
+
+
+//-------------------------------------------------------------------------I2S SPK & MIC-------------------------------------------------------------
+  volatile bool micStreamActive = false;
+
+  Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+
+  // --- I2S config for MSM261S mic ---
+
+  #define MY_I2S_PORT I2S_NUM_1   // instead of I2S_NUM_0
+
+  #define I2S_MIC_WS    40
+  #define I2S_MIC_SD    38
+  #define I2S_MIC_SCK   39
+
+  // --- I2S config for NS4168 speaker ---
+  #define I2S_SPK_SD    9
+  #define I2S_SPK_BCLK  10
+  #define I2S_SPK_LRCK  45
+  #define I2S_SPK_PA    46  // Optional: amp enable
+
+  #define I2S_SAMPLE_RATE     16000
+  #define I2S_SAMPLE_BITS     I2S_BITS_PER_SAMPLE_16BIT
+  #define I2S_READ_LEN        1024
+
+
+  // ===== MIC STREAM STATE =====
+  static int16_t* micBuf = nullptr;
+  static size_t   micBufBytes   = I2S_READ_LEN * sizeof(int16_t); // bytes per read
+  static uint32_t micLastSendMs = 0;
+
+
+  // Track current I2S state
+  enum I2SMode { I2S_NONE, I2S_MIC, I2S_SPEAKER };
+  I2SMode currentI2SMode = I2S_NONE;
+
+//----------------------------------------------------------------------CONTROL PINS---------------------------------------------------------------
+  // Channel numbers for ledcWrite/ledcSetup
+  #define CH_RIGHT_MOTOR_IN1 0
+  #define CH_RIGHT_MOTOR_IN2 1
+  #define CH_LEFT_MOTOR_IN1  2
+  #define CH_LEFT_MOTOR_IN2  3
+  #define CH_ARM_MOTOR_IN1   4
+  #define CH_ARM_MOTOR_IN2   5
+
+  // PWM channel mapping summary
+  #define PIN_RIGHT_MOTOR_IN1 16
+  #define PIN_RIGHT_MOTOR_IN2 17
+  #define PIN_LEFT_MOTOR_IN1  18
+
+  #if DEBUG_SERIAL
+    #define PIN_LEFT_MOTOR_IN2  -1
+    #define PIN_ARM_MOTOR_IN1   -1
+    #define PIN_ARM_MOTOR_IN2   -1
+  #else
+    #define PIN_LEFT_MOTOR_IN2  19
+    #define PIN_ARM_MOTOR_IN1   43
+    #define PIN_ARM_MOTOR_IN2   44
+  #endif
+
+
+  #define CH_BUCKET_SERVO    6
+  #define CH_AUX_SERVO       7
+
+//-------------------------------------------------------------------------CAMERA------------------------------------------------------------------
+
+  bool cameraEnabled = false;
+  bool cameraInitialized = false;
+
+  #define PWDN_GPIO_NUM    -1
+  #define RESET_GPIO_NUM   -1
+  #define XCLK_GPIO_NUM    33    // ✅ From MCLK
+  #define SIOD_GPIO_NUM    37    // ✅ From schematic SDA
+  #define SIOC_GPIO_NUM    36    // ✅ From schematic SCK
+
+  #define Y9_GPIO_NUM      47
+  #define Y8_GPIO_NUM      48
+  #define Y7_GPIO_NUM      42
+  #define Y6_GPIO_NUM      8
+  #define Y5_GPIO_NUM      6
+  #define Y4_GPIO_NUM      4
+  #define Y3_GPIO_NUM      5
+  #define Y2_GPIO_NUM      7
+
+  #define VSYNC_GPIO_NUM   35
+  #define HREF_GPIO_NUM    34
+  #define PCLK_GPIO_NUM    41
+
+  #define PWM_RES_BITS 14
+  #define PWM_PERIOD_US 20000
+
+  unsigned long lastCamCheck = 0;
+  const unsigned long camCheckInterval = 3000; // 3 seconds
+
+  //--------------Auto throttle stream quality-------------------------
+
+  volatile bool allowFsAuto      = false;  // UI: auto_res
+  volatile bool adaptiveQEnabled = true;   // UI: adaptive_q
+
+  static int   bestQualityCap   = 12;                 // best allowed (lowest number)
+  static int   minQualityFloor  = 38;                 // worst allowed (highest number) safety floor
+  static framesize_t startFS    = FRAMESIZE_VGA;      // your preferred FS from prefs
+  static framesize_t minFS      = FRAMESIZE_QQVGA;    // absolute minimum FS you accept
+  static framesize_t maxFS      = FRAMESIZE_SVGA;     // absolute maximum FS you want to use
+
+  // ---- Targets / thresholds ----
+  static const int   TARGET_FPS          = 15;
+  static const int   FPS_LO_HYST         = TARGET_FPS - 2;  // hysteresis window
+  static const int   FPS_HI_HYST         = TARGET_FPS + 3;
+
+  static const size_t HEAP_SOFT_FLOOR    = 180 * 1024; // below this: start easing quality
+  static const size_t HEAP_HARD_FLOOR    = 120 * 1024; // below this: drop framesize or degrade more
+  static const size_t HEAP_MIN_FREE_ABS  = 80  * 1024; // absolute floor = emergency degrade
+
+  static const int   RSSI_WEAK           = -70;  // dBm
+  static const int   RSSI_BAD            = -78;  // dBm
+
+  // ---- Step sizes / cadence ----
+  static const int   QUALITY_STEP        = 2;    // increase number = more compression
+  static const int   QUALITY_RECOVER_STEP= 1;    // decrease number = better quality
+  extern const uint32_t ADAPT_PERIOD_MS  = 1000; // run controller every second
+
+  // ---- State ----
+  static int         curQuality = 20;            // will be seeded from sensor at start
+  static framesize_t curFS      = FRAMESIZE_VGA; // will be seeded from sensor at start
+  static int         lastFrameCount = 0;
+  extern uint32_t lastTickMs = 0;
+
+  // Helpers: next lower/higher framesize within your allowed band
+  framesize_t stepDownFS(framesize_t fs) { // “bigger pixels” → fewer bytes
+    if (fs <= minFS) return minFS;
+    return (framesize_t)((int)fs - 1);
+  }
+  framesize_t stepUpFS(framesize_t fs) { // “smaller pixels” → more detail
+    if (fs >= maxFS) return maxFS;
+    return (framesize_t)((int)fs + 1);
+  }
+
+  // Bound a value into [lo, hi]
+  int clampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+//-------------------------------------------------------------------SD_|CARD Pin defines----------------------------------------------------------
+
+  #define SD_CS   2
+  #define SD_SCK  11
+  #define SD_MOSI 3
+  #define SD_MISO 12
+
+  // ---- SD mutex (recursive) ----
+  static SemaphoreHandle_t sdMutex = nullptr;
+
+  static inline void initSdMutex() {
+    if (!sdMutex) sdMutex = xSemaphoreCreateRecursiveMutex();
+  }
+
+  struct SdLock {
+    SdLock()  { xSemaphoreTakeRecursive(sdMutex, portMAX_DELAY); }
+    ~SdLock() { xSemaphoreGiveRecursive(sdMutex); }
+  };
+
+  // --- Global SD stream gate (serialize SD sessions) ---
+  static SemaphoreHandle_t g_sdStreamGate;
+  static bool g_gateHeldByAudio = false;         // true while audio (mp3/wav) owns SD exclusively
+  static bool g_mediaPausedBySystem = false;     // we paused mp3 to play a system beep
+
+  struct SdGateGuard {
+    bool held = false;
+    SdGateGuard(bool take_now = true) {
+      if (take_now) take();
+    }
+    void take() {
+      if (!held) {
+        xSemaphoreTake(g_sdStreamGate, portMAX_DELAY);
+        held = true;
+      }
+    }
+    void give() {
+      if (held) {
+        xSemaphoreGive(g_sdStreamGate);
+        held = false;
+      }
+    }
+    ~SdGateGuard(){ give(); }
+  };
+
+//---------------------------------------------------------------------------I2C-------------------------------------------------------------------
+
+  #define BNO_SDA   15      // Use your actual I2C SDA pin for ESP32-S3!
+  #define BNO_SCL   14      // Use your actual I2C SCL pin for ESP32-S3!
+  Adafruit_BNO055 bno055 = Adafruit_BNO055(55, 0x28);  // 0x28 is default addr
+
+  volatile int frameCount = 0;  // For FPS counting, used in loop()
+
+  //-----------------------Neopixel Globals------------------------------
+
+  #define LED_PIN 21
+  #define NEO_COUNT 12
+  Adafruit_NeoPixel pixels(NEO_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+  bool beaconOn = false;
+  bool emergencyOn = false;
+  bool leftSignalActive = false;
+  bool rightSignalActive = false;
+
+  uint8_t beaconPhase = 0;
+  bool blinkState = false;  // For emergency and turn signals
+  unsigned long lastAnimUpdate = 0;
+  const unsigned long beaconInterval = 180;
+  const unsigned long blinkInterval = 400;
+
+//-----------------------------------------------------------------------WiFi Globals--------------------------------------------------------------
+
+enum WifiState { WIFI_AP_LOBBY, WIFI_STA_WAIT, WIFI_STA_OK };
+extern WifiState wifiState;
+WifiState wifiState = WIFI_AP_LOBBY;
+
+String wifiSSID = "";
+String wifiPassword = "";
+
+unsigned long wifiLastScanAt   = 0;
+unsigned long wifiConnectSince = 0;
+
+// scan / connect cadences
+const uint32_t SCAN_PERIOD_MS   = 15000;   // how often to scan while in AP lobby
+const uint32_t CONNECT_TIMEOUT  = 8000;    // how long to wait for WL_CONNECTED per attempt
+int currentCandidateIndex = -1;            // -1 means "start from preferred", then walk the list
+
+// optional: keep AP password you already have
+extern String g_apPassword;
+
+// Non-blocking auto-detach tracking for servos
+unsigned long auxDetachTime    = 0;
+bool          auxAttached      = false;
+
+unsigned long bucketDetachTime = 0;
+bool          bucketAttached   = false;
+
+// --- Path drawing type (was lost during edits) ---
+struct PathPoint { float x; float y; };
+
+bool shouldReboot = false;           // used in upload lambda
+bool otaValid     = false;           // used in upload lambda
+
+int  wifiRetryCount         = 5;
+bool wifiConnecting         = false;
+unsigned long wifiConnectStartTime = 0;
+
+//----------------------------------------------------------------------SERVO GLOBALS--------------------------------------------------------------
+
+  #define bucketServoPin  0
+  #define auxServoPin 20
+
+  int lastBucketValue = 140;  // Set to your safe init value
+  int lastAuxValue = 150;
+
+
+// ----------------------------------------------------------------------OLED Globals--------------------------------------------------------------
+
+  #define SCREEN_WIDTH 128   // or whatever your actual OLED width is
+  #define SCREEN_HEIGHT 64   // or whatever your OLED height is
+
+  #define TOTAL_OLED_FRAMES 30
+
+  // For OLED or UI feedback
+  unsigned long wifiOledLastMsg = 0;
+  String wifiOledLastStep = "";
+
+  int batteryPercentDisplay = 0; 
+
+  bool isCharging = false;
+
+  int wifiSignalStrength = 0;
+
+  String lastWsClientIP = "";
+  unsigned long lastWsConnectTime = 0;
+
+//----------------------------------------------------------------------SENSOR Globals-------------------------------------------------------------
+  #define BLevel 13
+  #define CSense 1
+
+//----------------------------------------------------------------------CONTROL Globals------------------------------------------------------------
+
+  #define UP 1
+  #define DOWN 2
+  #define LEFT 3
+  #define RIGHT 4
+  #define ARMUP 5
+  #define ARMDOWN 6
+  #define STOP 0
+  #define RIGHT_MOTOR 0
+  #define LEFT_MOTOR 1
+  #define ARM_MOTOR 2
+
+  #define DIR_STOP     0
+  #define DIR_FORWARD  1
+  #define DIR_BACKWARD -1
+
+
+  //Use a 10k + 4.7k divider — safe and very common. Let me know if yours is different.
+  unsigned long lastTelemetrySend = 0;
+
+  const float MAX_BATTERY_VOLTAGE = 8.4; // 2S Li-ion full charge
+  const float MIN_BATTERY_VOLTAGE = 6.0; // 2S safe cutoff
+
+  // ---- Actions we support everywhere ----
+  enum Action : uint8_t {
+    ACT_NONE = 0,
+    ACT_FORWARD, ACT_BACKWARD, ACT_LEFT, ACT_RIGHT, ACT_STOP,
+    ACT_ARM_UP, ACT_ARM_DOWN, ACT_BUCKET_UP, ACT_BUCKET_DOWN, 
+    ACT_AUX_UP, ACT_AUX_DOWN, ACT_LIGHT_TOGGLE, ACT_BEACON_TOGGLE, 
+    ACT_EMERGENCY_TOGGLE, ACT_HORN
+  };
+
+
+  static Action actionFromName(const String& name);
+  static Action actionForKeyToken(String keyToken);
+  static Action actionForJoyButtonCached(const String& btnName);
+  static void   dispatchAction(Action a, bool pressed);
+
+
+
+
+
+  // ---- Keyboard defaults (what the UI shows by default too) ----
+  static const struct { const char* action; const char* def; } KEYMAP_DEFAULTS[] = {
+    {"forward",       "w"},
+    {"backward",      "s"},
+    {"left",          "a"},
+    {"right",         "d"},
+    {"stop",          " "},   // space
+    {"arm_up",        " "},        
+    {"arm_down",      " "},
+    {"bucket_up",     "e"},
+    {"bucket_down",   "q"},
+    {"aux_up",        "r"},
+    {"aux_down",      "f"},
+    {"light_toggle",  "l"},
+    {"beacon", "b"},
+    {"emergency","x"},
+    {"horn",          "h"},
+  };
+  static const size_t KEYMAP_N = sizeof(KEYMAP_DEFAULTS)/sizeof(KEYMAP_DEFAULTS[0]);
+
+  // ---- Joypad defaults (Bluepad32-style names) ----
+  // Keep simple & digital to start; you can extend with axes later.
+  static const struct { const char* action; const char* defBtn; } JOYMAP_DEFAULTS[] = {
+    {"forward",       "DPAD_UP"},
+    {"backward",      "DPAD_DOWN"},
+    {"left",          "DPAD_LEFT"},
+    {"right",         "DPAD_RIGHT"},
+    {"stop",          "BTN_BACK"},       // “select/back” as stop
+    {"arm_up",        "L_STICK_UP"},     // ⟵ changed
+    {"arm_down",      "L_STICK_DOWN"},   // ⟵ changed 
+    {"bucket_up",     "R1"},
+    {"bucket_down",   "L1"},
+    {"aux_up",        "R2_CLICK"},       // treat R2/L2 as “click” if your lib offers it
+    {"aux_down",      "L2_CLICK"},
+    {"light_toggle",  "X"},
+    {"beacon", "Y"},
+    {"emergency","B"},
+    {"horn",          "A"},
+  };
+  static const size_t JOYMAP_N = sizeof(JOYMAP_DEFAULTS)/sizeof(JOYMAP_DEFAULTS[0]);
+
+  // Normalize UI tokens to stored form
+  static String normKeyToken(String s) {
+    // handle literal single space BEFORE trimming
+    if (s.length() == 1 && s[0] == ' ') return String(" ");
+
+    s.trim();
+    if (s.equalsIgnoreCase("Space")) return String(" ");
+    if (s.startsWith("Arrow")) { s.toLowerCase(); return s; }  // ArrowUp -> arrowup
+    s.toLowerCase();                                           // letters/digits -> lowercase
+    return s;
+  }
+
+  // Accept both UI camelCase and firmware snake_case names
+  struct ActionAlias { const char* fw; const char* alias; };
+  static const ActionAlias ACTION_ALIASES[] = {
+    {"forward","forward"}, {"backward","backward"}, {"left","left"}, {"right","right"},
+    {"stop","stop"},
+    {"arm_up","armUp"}, {"arm_down","armDown"},
+    {"bucket_up","bucketUp"}, {"bucket_down","bucketDown"},
+    {"aux_up","auxUp"}, {"aux_down","auxDown"},
+    {"light_toggle","led"}, {"beacon","beacon"},
+    {"emergency","emergency"},               // UI "emergency"
+    {"emergency","emergency_toggle"},        // legacy alias accepted too
+    {"horn","horn"},
+  };
+  static const size_t ACTION_ALIASES_N = sizeof(ACTION_ALIASES)/sizeof(ACTION_ALIASES[0]);
+
+  static String aliasToFw(const String& key) {
+    for (size_t i=0;i<ACTION_ALIASES_N;++i) {
+      if (key.equalsIgnoreCase(ACTION_ALIASES[i].alias)) return String(ACTION_ALIASES[i].fw);
+      if (key.equalsIgnoreCase(ACTION_ALIASES[i].fw))    return String(ACTION_ALIASES[i].fw);
+    }
+    return key;
+  }
+
+//-------------------------------------------------------------------UI Settings variables---------------------------------------------------------
+
+  bool darkMode    = false;
+  bool horScreen   = false;
+  bool holdBucket  = false;
+  bool holdAux     = false;
+  bool tlmEnabled  = false;
+  bool sSndEnabled = false;
+  bool bluepadEnabled = false;
+  int  sSndVolume  = 15;
+
+
+  // global constants
+  //const char* ap_ssid = "MiniExco_Setup";
+
+  bool light = false;
+
+
+  AsyncWebServer server(80);
+  AsyncWebSocket wsCarInput("/CarInput");
+
+
+  // --- PSRAM allocator for ESP32 Arduino ---
+  // This must be defined ONCE, above all vector declarations that use it.
+  #if USE_PSRAM
+  template <class T>
+  struct psram_allocator : public std::allocator<T> {
+      template<class U> struct rebind { typedef psram_allocator<U> other; };
+      T* allocate(std::size_t n) {
+          void* p = ps_malloc(n * sizeof(T));
+          if (!p) throw std::bad_alloc();
+          return static_cast<T*>(p);
+      }
+      void deallocate(T* p, std::size_t) noexcept { free(p); }
+  };
+  #endif
+
+//-----------------------------------------------------------------------PSRAM GLOBALS-------------------------------------------------------------
+  // -----------------------------------------------------
+  // PSRAM-based or regular vector declarations for globals
+  // Place this block after your struct/class definitions (TelemetrySample, PathPoint)
+  // and after psram_allocator is defined
+  // -----------------------------------------------------
+
+  #if USE_PSRAM
+  // Use psram_allocator for all large or expandable vectors to store them in external PSRAM.
+  // This saves valuable internal RAM for stack/heap.
+  // You can add any additional vectors here to move them to PSRAM.
+
+  std::vector<String, psram_allocator<String>> playlist;           // Stores filenames or track names for media
+  std::vector<int, psram_allocator<int>> folderIndex;              // Index mapping for folders
+  std::vector<PathPoint, psram_allocator<PathPoint>> pathPoints;   // List of path points received from frontend UI
+  std::vector<TelemetrySample, psram_allocator<TelemetrySample>> telemetryBuffer; // Buffer for telemetry logging
+
+  #else
+  // If not using PSRAM, fall back to normal std::vector on internal RAM.
+
+  std::vector<String> playlist;
+  std::vector<int> folderIndex;
+  std::vector<PathPoint> pathPoints;
+  std::vector<TelemetrySample> telemetryBuffer;
+
+  #endif
+
+  int currentTrack = 0;
+  int currentVolume = 15;    // Default volume (0–21)
+
+  String currentlyPlayingFile = "";
+  unsigned long lastMediaProgressSend = 0;
+
+
+
+
+
+//-----------------------------------------------------------------MDNS HELPERS TO SANITIZE ID-----------------------------------------------------
+
+  // Global sanitized hostname to use everywhere (STA/AP/mDNS)
+  String g_mdnsHost;
+
+  // Make a valid mDNS/DHCP hostname from S3_ID (lowercase, [a-z0-9-], <=63)
+  static String makeMdnsHostFromId(const char* id) {
+    String s = id;
+    s.toLowerCase();
+    for (size_t i = 0; i < s.length(); ++i) {
+      char c = s[i];
+      bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '-');
+      if (!ok) s.setCharAt(i, '-');
+    }
+    while (s.length() && s[0] == '-') s.remove(0, 1);
+    while (s.length() && s[s.length()-1] == '-') s.remove(s.length()-1, 1);
+    while (s.indexOf("--") != -1) s.replace("--", "-");
+    if (s.isEmpty()) s = "esp32";
+    if (s.length() > 63) s = s.substring(0, 63);
+    return s;
+  }
+
+  // Call this early (before/around WiFi.begin) to set DHCP hostname
+  static void initHostnames() {
+    g_mdnsHost = makeMdnsHostFromId(S3_ID);  // e.g. "miniexco-s3-v1-01"
+    WiFi.setHostname(g_mdnsHost.c_str());
+  }
+
+  // Start mDNS after you are connected (STA) or after AP is up (AP)
+  static bool startMdns() {
+    if (MDNS.begin(g_mdnsHost.c_str())) {
+      MDNS.setInstanceName(S3_ID);                 // pretty name
+      MDNS.addService("http", "tcp", 80);          // UI
+      MDNS.addServiceTxt("http", "tcp", "path", "/");
+      MDNS.addService("http", "tcp", 81);          // stream
+      MDNS.addServiceTxt("http", "tcp", "path", "/stream");
+      return true;
+    }
+    return false;
+  }
+//---------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+//-------------------------------------------------------------------------FUNCTIONS-----------------------------------------------------------------
+
+
+//----------------------------------------------------------------------Robot Cam Settings----------------------------------------------------------
+
+  void startCameraServer();
+
+  bool startCamera() {
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer   = LEDC_TIMER_0;
+    config.pin_d0       = Y2_GPIO_NUM;
+    config.pin_d1       = Y3_GPIO_NUM;
+    config.pin_d2       = Y4_GPIO_NUM;
+    config.pin_d3       = Y5_GPIO_NUM;
+    config.pin_d4       = Y6_GPIO_NUM;
+    config.pin_d5       = Y7_GPIO_NUM;
+    config.pin_d6       = Y8_GPIO_NUM;
+    config.pin_d7       = Y9_GPIO_NUM;
+    config.pin_xclk     = XCLK_GPIO_NUM;
+    config.pin_pclk     = PCLK_GPIO_NUM;
+    config.pin_vsync    = VSYNC_GPIO_NUM;
+    config.pin_href     = HREF_GPIO_NUM;
+    config.pin_sccb_sda = SIOD_GPIO_NUM;
+    config.pin_sccb_scl = SIOC_GPIO_NUM;
+    config.pin_pwdn     = PWDN_GPIO_NUM;
+    config.pin_reset    = RESET_GPIO_NUM;
+
+    config.xclk_freq_hz = 10000000;
+    config.frame_size   = FRAMESIZE_UXGA;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+    config.fb_location  = CAMERA_FB_IN_PSRAM;
+    config.jpeg_quality = 12;
+    config.fb_count     = 1;
+
+    if (config.pixel_format == PIXFORMAT_JPEG) {
+      if (psramFound()) {
+        config.jpeg_quality = 10;
+        config.fb_count     = 1;
+        //config.grab_mode    = CAMERA_GRAB_LATEST;
+        config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+
+      } else {
+        config.frame_size   = FRAMESIZE_SVGA;
+        //config.fb_location  = CAMERA_FB_IN_DRAM;
+        config.fb_location  = CAMERA_FB_IN_PSRAM;
+      }
+    } else {
+      config.frame_size = FRAMESIZE_240X240;
+    #if CONFIG_IDF_TARGET_ESP32S3
+      config.fb_count = 1;
+    #endif
+    }
+
+    esp_err_t err = esp_camera_init(&config);
+
+    DBG_PRINTF("[HEAP][After camera init] Free: %u, MinFree: %u, MaxAlloc: %u\n",
+              ESP.getFreeHeap(),
+              heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    DBG_PRINTF("[PSRAM][After camera init] Free: %u, MinFree: %u, MaxAlloc: %u\n",
+              heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+              heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+              heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
+    if (err != ESP_OK) {
+      DBG_PRINTF("Camera init failed with error 0x%x\n", err);
+      return false;
+    }
+
+    sensor_t *s = esp_camera_sensor_get();
+    if (s && s->id.PID == OV3660_PID) {
+      s->set_vflip(s, 1);
+      s->set_brightness(s, 1);
+      s->set_saturation(s, -2);
+    }
+    if (config.pixel_format == PIXFORMAT_JPEG && s) {
+      s->set_framesize(s, FRAMESIZE_QVGA);
+    }
+
+    return true;
+  }
+
+
+  void applySavedCamSettings() {
+      sensor_t *s = esp_camera_sensor_get();
+      if (!s) return;
+
+      // === Universal settings ===
+      int res        = camPrefs.getInt("res", FRAMESIZE_VGA);
+      int quality    = camPrefs.getInt("quality", 10);
+      int contrast   = camPrefs.getInt("contrast", 0);
+      int brightness = camPrefs.getInt("brightness", 0);
+      int saturation = camPrefs.getInt("saturation", 0);
+      int gray       = camPrefs.getInt("gray", 0);
+      int hmirror    = camPrefs.getInt("hmirror", 0);
+      int vflip      = camPrefs.getInt("vflip", 0);
+      int special_effect = camPrefs.getInt("special_effect", 0);
+      int wb_mode    = camPrefs.getInt("wb_mode", 0);
+      int awb        = camPrefs.getInt("awb", 1);
+      int agc        = camPrefs.getInt("agc", 1);
+      int agc_gain   = camPrefs.getInt("agc_gain", 0);
+      int aec        = camPrefs.getInt("aec", 1);
+      int aec_value  = camPrefs.getInt("aec_value", 300);
+      int aec2       = camPrefs.getInt("aec2", 0);
+      int dcw        = camPrefs.getInt("dcw", 1);
+      int bpc        = camPrefs.getInt("bpc", 0);
+      int wpc        = camPrefs.getInt("wpc", 1);
+      int raw_gma    = camPrefs.getInt("raw_gma", 1);
+      int lenc       = camPrefs.getInt("lenc", 1);
+      int gainceiling= camPrefs.getInt("gainceiling", 0);
+      int colorbar   = camPrefs.getInt("colorbar", 0);
+
+      s->set_framesize(s, (framesize_t)res);
+      s->set_quality(s, quality);
+      s->set_contrast(s, contrast);
+      s->set_brightness(s, brightness);
+      s->set_saturation(s, saturation);
+      s->set_special_effect(s, special_effect);
+      s->set_hmirror(s, hmirror);
+      s->set_vflip(s, vflip);
+      s->set_whitebal(s, awb);
+      s->set_wb_mode(s, wb_mode);
+      s->set_gain_ctrl(s, agc);
+      s->set_agc_gain(s, agc_gain);
+      s->set_exposure_ctrl(s, aec);
+      s->set_aec_value(s, aec_value);
+      s->set_aec2(s, aec2);
+      s->set_dcw(s, dcw);
+      s->set_bpc(s, bpc);
+      s->set_wpc(s, wpc);
+      s->set_raw_gma(s, raw_gma);
+      s->set_lenc(s, lenc);
+      s->set_gainceiling(s, (gainceiling_t)gainceiling);
+      s->set_colorbar(s, colorbar);
+
+      // === OV2640-specific ===
+      if (s->id.PID == OV2640_PID) {
+          int sharpness  = camPrefs.getInt("sharpness", 2);
+          int denoise    = camPrefs.getInt("denoise", 0);
+          int compression= camPrefs.getInt("compression", 12);
+
+          if (s->set_sharpness) s->set_sharpness(s, sharpness);
+          if (s->set_denoise)   s->set_denoise(s, denoise);
+          if (s->set_quality)   s->set_quality(s, compression); // Can be optional
+      }
+
+      // === OV5640-specific ===
+      if (s->id.PID == OV5640_PID) {
+          int sharpness  = camPrefs.getInt("sharpness", 33);    // 0..255
+          int denoise    = camPrefs.getInt("denoise", 0);       // 0,1
+          int brightness = camPrefs.getInt("brightness", 0);    // -4..4
+          int saturation = camPrefs.getInt("saturation", 0);    // -4..4
+          int contrast   = camPrefs.getInt("contrast", 0);      // -4..4
+          // int hue        = camPrefs.getInt("hue", 0);        // NOT USED
+
+          if (s->set_sharpness)   s->set_sharpness(s, sharpness);
+          if (s->set_denoise)     s->set_denoise(s, denoise);
+          if (s->set_brightness)  s->set_brightness(s, brightness);
+          if (s->set_saturation)  s->set_saturation(s, saturation);
+          if (s->set_contrast)    s->set_contrast(s, contrast);
+          // No set_hue for OV5640 or any camera
+      }
+
+
+      // === Add other models as needed ===
+      // For example: OV3660, etc.
+      // if (s->id.PID == OV3660_PID) { ... }
+
+      // -- Optionally, print sensor info for debug --
+      DBG_PRINTF("Camera PID: 0x%04X\n", s->id.PID);
+  }
+
+  // --- Enable/disable functions ---
+  bool enableCamera() {
+    saveCameraPrefs(true);
+    if (!cameraInitialized) {
+      if (!startCamera()) {
+        DBG_PRINTLN("enableCamera(): startCamera failed");
+        return false;
+      }
+      cameraInitialized = true;
+      startCameraServer();       // assumes idempotent
+      applySavedCamSettings();
+      initAdaptiveCameraCaps();
+      DBG_PRINTLN("Camera enabled.");
+    }
+    return true;
+  }
+
+  bool disableCamera() {
+    if (cameraInitialized) {
+      esp_camera_deinit();
+      cameraInitialized = false;
+      DBG_PRINTLN("Camera deinitialized.");
+    }
+    saveCameraPrefs(false);
+    return true;
+  }
+
+  void loadCameraPrefs() {
+      cameraEnabled = camEnablePrefs.getBool("enabled", true); // or false if you want default OFF
+  }
+
+  void saveCameraPrefs(bool enabled) {
+      camEnablePrefs.putBool("enabled", enabled);
+  }
+
+  //----------------------Auto throttle stream quality functions----------------------------
+
+
+  // Initialize from prefs and actual sensor
+  void initAdaptiveCameraCaps() {
+    // Use the same prefs your UI writes
+    bestQualityCap = clampInt(camPrefs.getInt("quality", 12), 10, 40);
+    startFS        = (framesize_t)clampInt(camPrefs.getInt("res", (int)FRAMESIZE_VGA),
+                                          (int)minFS, (int)maxFS);
+    // new optional UI flags
+    allowFsAuto    = camPrefs.getBool("auto_res", false);  
+    adaptiveQEnabled  = camPrefs.getBool("adaptive_q", true);
+
+    // Seed from current sensor so we don’t fight a fresh applySavedCamSettings()
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) {
+      curQuality = s->status.quality;
+      curFS      = (framesize_t)s->status.framesize;
+    }
+
+    // Snap to your prefs and publish them via the stream-safe hook
+    curQuality = clampInt(curQuality, bestQualityCap, minQualityFloor);
+    curFS      = startFS;
+    requestCameraParams(curFS, curQuality);  // stream loop applies between frames
+  }
+
+  // Core policy: compute new target (quality, framesize)
+  void adaptCameraOnce() {
+    // compute FPS
+    int frames = frameCount;
+    int fps = frames - lastFrameCount;
+    lastFrameCount = frames;
+
+    // sample health metrics
+    size_t freeHeap   = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t minEver    = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+    int rssi          = WiFi.isConnected() ? WiFi.RSSI() : -100;
+
+    bool needRelief = (freeHeap < HEAP_SOFT_FLOOR) || (rssi <= RSSI_WEAK) || (fps < FPS_LO_HYST);
+    bool severe     = (freeHeap < HEAP_HARD_FLOOR) || (rssi <= RSSI_BAD)
+                      || (minEver < HEAP_MIN_FREE_ABS) || (fps < TARGET_FPS - 4);
+    bool canRecover = (freeHeap > HEAP_SOFT_FLOOR + 40*1024) && (rssi > RSSI_WEAK) && (fps > FPS_HI_HYST);
+
+    int newQ = curQuality;
+    framesize_t newFS = curFS;
+
+    // If adaptive quality is OFF, don’t auto-tune quality (only obey manual changes)
+    // If auto-res is OFF, never change framesize unless emergency RAM floor
+    bool canTouchQuality = adaptiveQEnabled;
+    bool canTouchFS = allowFsAuto;
+
+    if (needRelief) {
+      if (canTouchQuality) newQ += severe ? QUALITY_STEP * 2 : QUALITY_STEP;
+      if (severe && (canTouchFS || freeHeap < HEAP_MIN_FREE_ABS)) {
+        newFS = stepDownFS(newFS);
+      }
+    } else if (canRecover) {
+      if (canTouchQuality) newQ -= QUALITY_RECOVER_STEP;
+      if (canTouchFS && newFS < startFS &&
+          fps > TARGET_FPS + 6 &&                  // FPS well above target (≈15)
+          rssi > RSSI_WEAK + 5 &&                  // Wi-Fi is strong, not marginal
+          freeHeap > HEAP_SOFT_FLOOR + 64*1024) {  // at least +64k heap above soft floor
+        newFS = stepUpFS(newFS);
+      }
+    }
+
+    // Never exceed user's best/“max” quality or your safety floor
+    newQ = clampInt(newQ, bestQualityCap, minQualityFloor);
+
+    // Never go beyond the user’s selected resolution upward
+    if (newFS > startFS) newFS = startFS;
+
+    if (newQ != curQuality || newFS != curFS) {
+      curQuality = newQ;
+      curFS      = newFS;
+      requestCameraParams(curFS, curQuality);  // applied cleanly between frames
+    }
+  }
+
+  void runAdaptiveCamera() {
+    uint32_t now = millis();
+    if (now - lastTickMs >= ADAPT_PERIOD_MS) {
+      lastTickMs = now;
+      adaptCameraOnce();
+    }
+  }
+
+  inline void adaptiveKickNow() {
+    // ensures runAdaptiveCamera() triggers adaptCameraOnce() at next iteration
+    lastTickMs = (millis() > ADAPT_PERIOD_MS) ? (millis() - ADAPT_PERIOD_MS) : 0;
+  }
+
+//------------------------------------------------------------------Telemetry Logging Functions-----------------------------------------------------
+
+  // Quick SD-present check that doesn't open extra files
+  static inline bool sdPresent() {
+    SdLock lock;
+    return SD.cardType() != CARD_NONE;
+  }
+
+  // Single place to flip the flag + persist + cleanup
+  static void setTelemetryEnabled(bool on) {
+    tlmEnabled = on;
+    uiPrefs.putBool("RecordTelemetry", tlmEnabled);
+    if (!on) {
+      telemetryBuffer.clear();       // drop any queued samples
+      currentTelemetryFile = "";     // forget target file so we re-pick when re-enabled
+    }
+  }
+
+
+  void resetCurrentSample() {
+    currentSample.timestamp    = 0;
+    currentSample.voltage      = NAN;
+    currentSample.temp         = NAN;
+    currentSample.charger      = NAN;
+    currentSample.imu_euler_x  = NAN;
+    currentSample.imu_euler_y  = NAN;
+    currentSample.imu_euler_z  = NAN;
+    currentSample.imu_mag_x    = NAN;
+    currentSample.imu_mag_y    = NAN;
+    currentSample.imu_mag_z    = NAN;
+    currentSample.imu_temp     = NAN;
+    currentSample.fps          = NAN;
+  }
+
+  void flushTelemetryBufferToSD_Auto() {
+    static unsigned long lastFlushTime = 0;
+    if (!tlmEnabled) return;  // Only log when enabled
+    if (!sdPresent()) return;   // <- don't even try to open anything if card is ejected
+
+    unsigned long now = millis();
+    if (now - lastFlushTime < telemetrySampleInterval) return;
+    lastFlushTime = now;
+
+    // --- Set timestamp for this sample ---
+    if (timeIsValid) {
+      time_t nowT;
+      time(&nowT);
+      currentSample.timestamp = nowT; // UNIX time
+    } else {
+      currentSample.timestamp = millis() / 1000;
+    }
+
+    // --- Buffer currentSample for writing ---
+    telemetryBuffer.push_back(currentSample);
+
+    // === SD card is accessed from here on ===
+    {
+      SdLock lock;  // 🔒 Mutex lock for SD access
+
+      // Ensure /telemetry folder exists
+      if (!SD.exists("/telemetry")) {
+        SD.mkdir("/telemetry");
+      }
+
+      // ---- Find the current file number ----
+      int idx = 1;
+      while (true) {
+        String fname = "/telemetry/telemetry_";
+        fname += (idx < 10 ? "0" : "");
+        fname += String(idx);
+        fname += ".csv";
+
+        if (!SD.exists(fname)) {
+          // Create new file with header
+          File f = SD.open(fname, FILE_WRITE);
+          if (f) {
+            f.println(TELEMETRY_CSV_HEADER);
+            f.close();
+          }
+          currentTelemetryFile = fname;
+          break;
+        } else {
+          File f = SD.open(fname, FILE_READ);
+          if (f && f.size() < TELEMETRY_FILE_MAX_SIZE) {
+            currentTelemetryFile = fname;
+            f.close();
+            break;
+          }
+          if (f) f.close();
+          idx++;
+        }
+      }
+
+      // ---- If appending would exceed size, rotate to next file ----
+      File f = SD.open(currentTelemetryFile, FILE_APPEND);
+      if (!f) {
+        DBG_PRINTF("Failed to open %s for appending!\n", currentTelemetryFile.c_str());
+        // If the SD was pulled, stop hammering the card. We’ll resume when user re-enables.
+        if (!sdPresent()) {
+          setTelemetryEnabled(false);    // auto-disable to avoid repeated errors
+        }      
+        return;
+      }
+      size_t estimatedSize = telemetryBuffer.size() * sizeof(TelemetrySample);
+      if (f.size() + estimatedSize > TELEMETRY_FILE_MAX_SIZE) {
+        f.close();
+        idx++;
+        String nextFile = "/telemetry/telemetry_";
+        nextFile += (idx < 10 ? "0" : "");
+        nextFile += String(idx);
+        nextFile += ".csv";
+        File nf = SD.open(nextFile, FILE_WRITE);
+        if (nf) {
+          nf.println(TELEMETRY_CSV_HEADER);
+          nf.close();
+        }
+        currentTelemetryFile = nextFile;
+        f = SD.open(currentTelemetryFile, FILE_APPEND);
+        if (!f) {
+          DBG_PRINTF("Failed to open %s for appending!\n", currentTelemetryFile.c_str());
+          return;
+        }
+      }
+
+      // ---- Write all samples in the buffer ----
+      for (const auto& s : telemetryBuffer) {
+          if (timeIsValid) {
+              time_t rawTime = (time_t)s.timestamp;
+              struct tm * timeinfo = localtime(&rawTime);
+              char datetime[24] = {0};
+              if (timeinfo) {
+                  strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", timeinfo);
+                  f.print(datetime);
+              } else {
+                  f.print("");
+              }
+          } else {
+              f.print("");
+          }
+          f.print(",");
+          f.print(s.timestamp);    f.print(",");
+          f.print(s.voltage, 2);   f.print(",");
+          f.print(s.temp, 1);      f.print(",");
+          f.print(s.charger, 2);   f.print(",");
+          f.print(s.imu_euler_x, 2); f.print(",");
+          f.print(s.imu_euler_y, 2); f.print(",");
+          f.print(s.imu_euler_z, 2); f.print(",");
+          f.print(s.imu_mag_x, 2);   f.print(",");
+          f.print(s.imu_mag_y, 2);   f.print(",");
+          f.print(s.imu_mag_z, 2);   f.print(",");
+          f.print(s.imu_temp, 1);    f.print(",");
+          f.println(s.fps, 1);
+      }
+
+      f.close();
+    } // 🔓 Lock automatically released here
+
+    telemetryBuffer.clear();
+    resetCurrentSample();
+  }
+
+
+//-------------------------------------------------------------------------NPT Tine sync------------------------------------------------------------
+  // Call this after WiFi connects
+  void startNtpSync() {
+    static bool sntpInit = false;
+
+    // Non-blocking: just configure SNTP and return.
+    // (Turkey is UTC+3 permanently; no DST.)
+    const long gmtOffset_sec = 3 * 3600;
+    configTime(gmtOffset_sec, 0,
+              "pool.ntp.org",
+              "time.google.com",
+              "time.windows.com");
+
+    if (!sntpInit) {
+      sntp_set_sync_interval(60UL * 60UL * 1000UL);  // resync every 1h
+      sntp_set_time_sync_notification_cb([](struct timeval*) {
+        // no-op; ensures FS timestamps get updated when time changes
+      });
+      sntpInit = true;
+    }
+  }
+
+  // Non blocking NPT time sync
+  void pollTimeValid() {
+    static uint32_t lastPollMs = 0;
+    static uint8_t  backoffIdx = 0;
+    // gentle backoff so we don't spam when offline
+    const uint16_t backoffMs[] = {1000, 2000, 4000, 8000, 16000, 30000};
+
+    if (timeIsValid) return;
+
+    // Only try when we actually have internet
+    if (WiFi.status() != WL_CONNECTED) return;                // or: if (wifiState != WIFI_STA_CONNECTED) return;
+
+    uint32_t now = millis();
+    uint16_t interval = backoffMs[backoffIdx];
+    if (now - lastPollMs < interval) return;
+    lastPollMs = now;
+
+    struct tm tm;
+    // IMPORTANT: short timeout to keep this NON-BLOCKING
+    if (getLocalTime(&tm, 50)) {                              // 50 ms max
+      if ((tm.tm_year + 1900) >= 2023) {
+        timeIsValid = true;
+        DBG_PRINT("NTP time is valid: ");
+        DBG_PRINTLN(asctime(&tm));                            // asctime() already has a newline
+
+        //  (optional) set callback once; harmless if repeated
+        sntp_set_time_sync_notification_cb([](struct timeval *tv) {
+          // No-op; ensures FATFS has timestamps
+        });
+
+        backoffIdx = 0;                                       // reset backoff
+      }
+    } else {
+      // didn't get time yet; increase backoff up to max
+      if (backoffIdx < (sizeof(backoffMs) / sizeof(backoffMs[0]) - 1)) backoffIdx++;
+    }
+  }
+
+  void pumpTimeSyncTick() {
+    static bool sntpConfigured = false;
+
+    // Only do NTP work when STA is actually connected.
+    if (wifiState == WIFI_STA_OK || WiFi.status() == WL_CONNECTED) {
+      if (!sntpConfigured) {
+        startNtpSync();          // just config, returns immediately
+        sntpConfigured = true;
+        DBG_PRINTLN("[NTP] configured (non-blocking)");
+      }
+
+      // This is non-blocking (uses getLocalTime(&tm, 50) + backoff).
+      pollTimeValid();
+
+    } else {
+      // In AP / disconnected: do nothing (no NTP); reset so we re-config next time.
+      if (sntpConfigured) {
+        sntpConfigured = false;
+        // Optional: if you want to forget "valid" time when leaving STA:
+        // timeIsValid = false;
+        DBG_PRINTLN("[NTP] paused (not STA-connected)");
+      }
+    }
+  }
+
+
+//--------------------------------------------------------------------------Lighting----------------------------------------------------------------
+  void updatePixels() {
+      pixels.clear();
+
+      // Highest priority: Emergency
+      if (emergencyOn) {
+          uint32_t col = blinkState ? pixels.Color(255, 180, 0) : 0;
+          pixels.setPixelColor(0, col);
+          pixels.setPixelColor(5, col);
+          pixels.setPixelColor(6, col);
+          pixels.setPixelColor(11, col);
+          pixels.show();
+          // Stop siren if it was running
+          if (sirenPlaying) {
+              stopAudio();
+              sirenPlaying = false;
+          }
+          return;
+      }
+
+      // Beacon
+      if (beaconOn) {
+          static int phase = 0;
+          static unsigned long lastStep = 0;
+          const int stepDelay = 90;
+          const int whiteFlashes = 3;
+          // 3 blue fill + 3 red fill + 3 flashes + 3 white flashes = 12 phases
+          const int phaseCount = 3 + 3 + 3 + whiteFlashes * 2;
+
+          unsigned long now = millis();
+
+          if (now - lastStep > stepDelay) {
+              lastStep = now;
+              phase++;
+              if (phase >= phaseCount) phase = 0;
+          }
+
+          pixels.clear();
+
+          // Define which indices are paired for both bars
+          const int pairs[3][2] = { {0, 5}, {1, 4}, {2, 3} };
+
+          // BLUE FORWARD FILL
+          if (phase == 0) {
+              // Only ends
+              for (int b = 0; b < 2; b++) {
+                  pixels.setPixelColor(pairs[0][b], pixels.Color(0, 0, 255));
+                  pixels.setPixelColor(pairs[0][b]+6, pixels.Color(0, 0, 255));
+              }
+          } else if (phase == 1) {
+              // Ends + next inner
+              for (int step = 0; step < 2; step++)
+                  for (int b = 0; b < 2; b++) {
+                      pixels.setPixelColor(pairs[step][b], pixels.Color(0, 0, 255));
+                      pixels.setPixelColor(pairs[step][b]+6, pixels.Color(0, 0, 255));
+                  }
+          } else if (phase == 2) {
+              // All blue (ends + next inner + center)
+              for (int step = 0; step < 3; step++)
+                  for (int b = 0; b < 2; b++) {
+                      pixels.setPixelColor(pairs[step][b], pixels.Color(0, 0, 255));
+                      pixels.setPixelColor(pairs[step][b]+6, pixels.Color(0, 0, 255));
+                  }
+          }
+          // RED REVERSE FILL
+          else if (phase == 3) {
+              // Only center
+              for (int b = 0; b < 2; b++) {
+                  pixels.setPixelColor(pairs[2][b], pixels.Color(255, 0, 0));
+                  pixels.setPixelColor(pairs[2][b]+6, pixels.Color(255, 0, 0));
+              }
+          } else if (phase == 4) {
+              // Center + next outer
+              for (int step = 1; step < 3; step++)
+                  for (int b = 0; b < 2; b++) {
+                      pixels.setPixelColor(pairs[step][b], pixels.Color(255, 0, 0));
+                      pixels.setPixelColor(pairs[step][b]+6, pixels.Color(255, 0, 0));
+                  }
+          } else if (phase == 5) {
+              // All red (center + next outer + ends)
+              for (int step = 0; step < 3; step++)
+                  for (int b = 0; b < 2; b++) {
+                      pixels.setPixelColor(pairs[step][b], pixels.Color(255, 0, 0));
+                      pixels.setPixelColor(pairs[step][b]+6, pixels.Color(255, 0, 0));
+                  }
+          }
+          // FLASHES: RED, BLUE, RED
+          else if (phase == 6) {
+              for (int i = 0; i < 12; i++) pixels.setPixelColor(i, pixels.Color(255,0,0));
+          } else if (phase == 7) {
+              for (int i = 0; i < 12; i++) pixels.setPixelColor(i, pixels.Color(0,0,255));
+          } else if (phase == 8) {
+              for (int i = 0; i < 12; i++) pixels.setPixelColor(i, pixels.Color(255,0,0));
+          }
+          // WHITE FLASHES: on/off alternately
+          else if (phase >= 9 && phase < 9+whiteFlashes*2) {
+              if ((phase-9)%2 == 0) {
+                  for (int i=0; i<12; i++) pixels.setPixelColor(i, pixels.Color(255,255,255));
+              }
+              // Odd phases: off (pixels.clear() already called)
+          }
+
+          pixels.show();
+
+          // --- Siren control: loop while beacon is on ---
+          if (!sirenPlaying) {
+              playSystemSound("/web/pcm/siren.wav"); // loop if your function supports, else retrigger in handleAnimationTimers
+              sirenPlaying = true;
+          }
+          return;
+      } else if (sirenPlaying) {
+          // Beacon just turned off, stop the siren
+          stopAudio();
+          sirenPlaying = false;
+      }
+
+      // Main LED white
+      if (light) {
+          for (int i = 0; i < NEO_COUNT; i++)
+              pixels.setPixelColor(i, pixels.Color(255, 255, 255));
+          pixels.show();
+          return;
+      }
+
+      // Turn signals (blinkState toggles on/off)
+      if (leftSignalActive && !rightSignalActive) {
+          uint32_t col = blinkState ? pixels.Color(255, 180, 0) : 0;
+          pixels.setPixelColor(0, col);
+          pixels.setPixelColor(6, col);
+          pixels.show();
+          return;
+      }
+      if (rightSignalActive && !leftSignalActive) {
+          uint32_t col = blinkState ? pixels.Color(255, 180, 0) : 0;
+          pixels.setPixelColor(5, col);
+          pixels.setPixelColor(11, col);
+          pixels.show();
+          return;
+      }
+
+      pixels.show();
+  }
+
+  void pixelStart(){
+    pixels.begin();
+    pixels.setBrightness(30);
+    //pixels.setPixelColor(0, pixels.Color(255, 165, 0));  // Orange = Booting
+    pixels.show();
+  }
+
+  void handleAnimationTimers() {
+      static unsigned long lastAnimUpdate = 0;
+      static unsigned long lastBlinkUpdate = 0;
+      bool needsUpdate = false;
+
+      // Beacon: chase phase update
+      if (beaconOn && millis() - lastAnimUpdate > beaconInterval) {
+          beaconPhase = (beaconPhase + 1) % 4;
+          lastAnimUpdate = millis();
+          needsUpdate = true;
+      }
+
+      // Emergency and turn signals: blink toggle update
+      if ((emergencyOn || leftSignalActive || rightSignalActive) && millis() - lastBlinkUpdate > blinkInterval) {
+          blinkState = !blinkState;
+          lastBlinkUpdate = millis();
+          needsUpdate = true;
+      }
+
+      if (needsUpdate) updatePixels();
+  }
+
+
+//----------------------------------------------------------------------------OLED------------------------------------------------------------------
+  /*screen is 128x64 I2C SSD1306 (“2-color” means 8 rows yellow, 56 blue; common for these displays).*/
+
+  void displayMessage(const String& line1 = "", const String& line2 = "", const String& line3 = "") {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);      // <--- CRITICAL LINE!
+
+    if (line1 != "") {
+      display.setCursor(0, 0);
+      display.println(line1);
+    }
+    if (line2 != "") {
+      display.setCursor(0, 16);
+      display.println(line2);
+    }
+    if (line3 != "") {
+      display.setCursor(0, 26);
+      display.println(line3);
+    }
+
+    display.display();
+  }
+
+  void drawCenteredIP(const String& ip) {
+    display.setTextColor(SSD1306_WHITE);
+    display.fillRect(0, 0, 128, 16, SSD1306_BLACK); // Clear top
+    int textSize = 2;
+    int charW = 6 * textSize;
+    int ipLen = ip.length();
+    int maxChars = 128 / (charW); // e.g. 128/12 = 10
+
+    if (ipLen > maxChars) textSize = 1, charW = 6;
+
+    display.setTextSize(textSize);
+    int x = (128 - ipLen * charW) / 2;
+    if (x < 0) x = 0;
+    display.setCursor(x, 0);
+    display.print(ip);
+    display.setTextSize(1); // Reset for other text
+  }
+
+  void showWiFiScreen(const String& ip, const String& body, int bodySize = 2) {
+    display.clearDisplay();
+
+    // Top row: IP, yellow color on 2-color OLED (SSD1306 lib: set first 8 rows)
+    drawCenteredIP(ip);
+
+    // Body: Wi-Fi status
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(bodySize);
+    int bodyY = 18;
+    display.setCursor(0, bodyY);
+
+    if (bodySize == 2) {
+      display.println(body); // Just one or two lines
+    } else {
+      // Split by \n for up to 3 lines
+      int y = bodyY;
+      int start = 0, idx;
+      while ((idx = body.indexOf('\n', start)) != -1) {
+        String line = body.substring(start, idx);
+        display.setCursor(0, y);
+        display.println(line);
+        y += 8;
+        start = idx + 1;
+      }
+      if (start < body.length()) {
+        display.setCursor(0, y);
+        display.println(body.substring(start));
+      }
+    }
+
+    display.display();
+  }
+
+  void showWiFiStep(const String& msg, bool force = false) {
+    String ipToShow = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "WiFi";
+    int bodySize = (msg.length() < 18) ? 2 : 1;
+    showWiFiScreen(ipToShow, msg, bodySize);
+    wifiOledLastStep = msg;
+    wifiOledLastMsg = millis();
+  }
+
+  void showWiFiProgress(int percent) {
+    String ipToShow = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "WiFi";
+    display.clearDisplay();
+    drawCenteredIP(ipToShow);
+
+    display.setCursor(0, 20);
+    display.setTextSize(1);
+    display.println("Connecting...");
+
+    display.drawRect(0, 35, 128, 10, SSD1306_WHITE);
+    int barWidth = map(percent, 0, 100, 0, 124);
+    display.fillRect(2, 37, barWidth, 6, SSD1306_WHITE);
+
+    display.display();
+  }
+
+  void showCheckmark() {
+    display.clearDisplay();
+    drawCenteredIP(WiFi.localIP().toString());
+    display.setTextSize(2);
+    display.setCursor(30, 25);
+    display.println("✔");
+    display.display();
+    delay(800);
+  }
+
+  void drawGear(int cx, int cy, int r, int teeth, float angle) {
+    float toothWidth = PI / teeth;
+    float outerR = r;
+    float innerR = r - 3;
+
+    for (int i = 0; i < teeth; i++) {
+      float a = angle + i * 2 * PI / teeth;
+
+      float ax = cx + cos(a) * innerR;
+      float ay = cy + sin(a) * innerR;
+      float bx = cx + cos(a + toothWidth / 2) * outerR;
+      float by = cy + sin(a + toothWidth / 2) * outerR;
+      float cx2 = cx + cos(a + toothWidth) * innerR;
+      float cy2 = cy + sin(a + toothWidth) * innerR;
+
+      // Draw tooth triangle
+      display.drawLine(ax, ay, bx, by, SSD1306_WHITE);
+      display.drawLine(bx, by, cx2, cy2, SSD1306_WHITE);
+    }
+
+    // Optional: draw gear hub
+    display.drawCircle(cx, cy, 2, SSD1306_WHITE);
+  }
+
+  void drawBatteryBar(int x, int y, int width, int height, int percent, bool charging) {
+    display.drawRect(x, y, width, height, SSD1306_WHITE);
+    display.drawRect(x + width, y + height / 3, 2, height / 3, SSD1306_WHITE); // tip
+
+    int fillHeight = map(percent, 0, 100, 0, height - 2);
+    display.fillRect(x + 1, y + height - 1 - fillHeight, width - 2, fillHeight, SSD1306_WHITE);
+
+    if (charging) {
+      // Simple animated lightning bolt
+      static bool flash = false;
+      flash = !flash;
+
+      if (flash) {
+        display.setCursor(x + 1, y - 8);
+        display.setTextSize(1);
+        display.print("⚡");  // Alternatively: use custom shape if ⚡ doesn't render
+      }
+    }
+  }
+
+  void drawWiFiBars(int x, int y, int quality) {
+    int levels = map(quality, 0, 100, 0, 4); // 0 to 4 bars
+    int barWidth = 3, spacing = 2;
+    
+    for (int i = 0; i < 4; i++) {
+      int barHeight = (i + 1) * 4;
+      int bx = x + i * (barWidth + spacing);
+      int by = y + 16 - barHeight;
+      if (i < levels) {
+        display.fillRect(bx, by, barWidth, barHeight, SSD1306_WHITE);
+      } else {
+        display.drawRect(bx, by, barWidth, barHeight, SSD1306_WHITE);
+      }
+    }
+  }
+
+  void drawWebSocketStatus() {
+    if (lastWsClientIP != "" && millis() - lastWsConnectTime < 15000) {
+      String wsText = "WS: " + lastWsClientIP;
+      //playSystemSound("/web/pcm/click.wav");
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+
+      int16_t x1, y1;
+      uint16_t w, h;
+      display.getTextBounds(wsText, 0, 0, &x1, &y1, &w, &h);
+
+      if (w < 128) {
+        display.setCursor((128 - w) / 2, 56);  // bottom center
+        display.print(wsText);
+      } else {
+        static int scrollX = 0;
+        scrollX = (scrollX + 2) % (w + 128);
+        display.setCursor(128 - scrollX, 56);
+        display.print(wsText);
+      }
+    }
+  }
+
+  void animateGears() {
+    static float angle1 = 0;
+    const int r1 = 10, r2 = 15;
+    const int teeth1 = 8, teeth2 = 12;
+    const int x1 = 50, y1 = 32;
+    const int x2 = x1 + r1 + r2 - 1;
+
+    // Load user OLED settings (no SD lock needed here - Preferences is thread-safe)
+    String oledLayout = oledPrefs.getString("layout", "default");
+    bool showIP       = oledPrefs.getBool("showIP", true);
+    bool showBattery  = oledPrefs.getBool("showBattery", true);
+    bool showWiFi     = oledPrefs.getBool("showWiFi", true);
+
+    display.clearDisplay();
+
+    // Show IP at top center (if enabled)
+    if (showIP) {
+      String ipStr = (WiFi.status() == WL_CONNECTED)
+                    ? WiFi.localIP().toString()
+                    : "WiFi";
+      drawCenteredIP(ipStr);
+    }
+
+    // AP mode indicator (top-left)
+    if (WiFi.getMode() == WIFI_AP && WiFi.status() != WL_CONNECTED) {
+      drawAPIndicator(0, 0);
+    }
+
+    // Apply layout logic
+    if (oledLayout == "default") {
+      // Gears + battery + Wi-Fi bars
+      if (showBattery)
+        drawBatteryBar(0, 20, 8, 24, batteryPercentDisplay, isCharging);
+
+      if (showWiFi)
+        drawWiFiBars(110, 20, wifiSignalStrength);
+
+      // Gears animation
+      drawGear(x1, y1, r1, teeth1, angle1);
+      drawGear(x2, y1, r2, teeth2, -angle1 * ((float)teeth1 / teeth2) + PI / teeth2);
+      angle1 += 0.2f;
+
+    } else if (oledLayout == "text") {
+      // Just show centered message
+      displayMessage("MiniExco", "System Ready", "");
+
+    } else if (oledLayout == "animation") {
+      // Try to load a frame from SD and show it
+      static int frame = 0;
+      char filename[32];
+      sprintf(filename, "/oled_anim/frame_%03d.raw", frame);
+
+      {
+        SdLock lock; // 🔒 Protect SD access
+        File f = SD.open(filename, FILE_READ);
+        if (f) {
+          // ---- Allocate buffer dynamically in PSRAM if enabled ----
+          uint8_t* buffer = nullptr;
+          #if USE_PSRAM
+            buffer = (uint8_t*)ps_malloc(2048);
+          #else
+            buffer = (uint8_t*)malloc(1024);
+          #endif
+          if (buffer) {
+            f.read(buffer, 1024);
+            f.close();
+            display.drawBitmap(0, 0, buffer, 128, 64, SSD1306_WHITE);
+            frame = (frame + 1) % TOTAL_OLED_FRAMES;
+            free(buffer);  // Always free after use!
+          } else {
+            displayMessage("⚠️ Animation", "buffer error", "");
+            f.close();
+          }
+        } else {
+          displayMessage("⚠️ Animation", "frame missing", "");
+        }
+      } // 🔓 Lock released here
+    }
+
+    drawWebSocketStatus();
+    display.display();
+  }
+
+  void drawAPIndicator(int x, int y) {
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(x, y);
+    display.print("AP");
+  }
+
+  void animateAP() {
+    static uint8_t phase = 0;
+    display.clearDisplay();
+
+    int cx = 20, cy = 32;
+    display.fillCircle(cx, cy, 3, SSD1306_WHITE);  // AP center
+
+    for (int i = 0; i < 3; i++) {
+      uint8_t r = 8 + i * 6 + (phase % 6) / 2;     // slow ripple
+      display.drawCircle(cx, cy, r, SSD1306_WHITE);
+    }
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(50, 28);
+    display.print("AP MODE");
+    display.display();
+
+    phase++;
+  }
+
+//-----------------------------------------------------------------------------I2C------------------------------------------------------------------
+
+  void i2cStart(){
+
+    Wire.begin(BNO_SDA, BNO_SCL);  // I2C pins
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+      DBG_PRINTLN(F("❌ OLED init failed"));
+    } else {
+      displayMessage("", "🔋 MiniExco Booting", "Please wait");
+    }
+
+  }
+
+  bool initBNO055() {
+    Wire.begin(BNO_SDA, BNO_SCL);
+    for (int i = 0; i < 5; ++i) {
+      if (bno055.begin()) {
+        imuPresent = true;
+        bno055.setExtCrystalUse(true);
+        return true;
+      }
+      delay(100);
+    }
+    imuPresent = false;
+    DBG_PRINTLN("❌ BNO055 not detected; continuing without IMU.");
+    return false;
+  }
+
+  void spiStart() {
+    SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+
+    bool ok = false;
+
+    // --- Prefer new-style config if available (Arduino-ESP32 2.x/3.x) ---
+    // SDFSConfig lets us set MaxOpenFiles; header is provided by SD.h in new cores.
+    #if defined(SDFS_CONFIG_H) || defined(ARDUINO_ESP32_RELEASE_3_0_0) || defined(ARDUINO_ESP32_RELEASE_2_0_0)
+    {
+      SDFSConfig cfg;
+      cfg.setSPI(SPI);
+      cfg.setCSPin(SD_CS);
+      cfg.setMaxOpenFiles(24);               // <-- raise from default 5
+      cfg.setAllocationUnitSize(16 * 1024);  // optional; keeps FAT happy
+
+      ok = SD.begin(cfg);
+    }
+    #else
+    // --- Fallback: older core signature supports max_files as 5th arg ---
+    // SD.begin(cs, spi, freq, mountpoint, max_files)
+    {
+      ok = SD.begin(SD_CS, SPI, 40000000U, "/sd", 24);   // <-- raise to 24
+    }
+    #endif
+
+    if (!ok) {
+      DBG_PRINTLN("SD Card initialization failed!");
+      return;
+    }
+
+    DBG_PRINTLN("SD Card initialized.");
+    // SD.setTimeCallback(getFatTime); // if you use timestamps
+
+    // Helpers to make dirs safely
+    auto ensureDir = [](const char* p) {
+      SdLock lock;
+      if (!SD.exists(p)) {
+        SD.mkdir(p);
+        DBG_PRINTF("Created %s folder on SD card.\n", p);
+      }
+    };
+
+    // Base folders
+    ensureDir("/media");
+    ensureDir("/web");
+    ensureDir("/web/pcm");
+    ensureDir("/firmware");
+    ensureDir("/telemetry");
+
+    // Media subfolders
+    const char* mediaFolders[] = {"/capture", "/wav", "/video", "/mp3", "/anim"};
+    for (size_t i = 0; i < sizeof(mediaFolders) / sizeof(mediaFolders[0]); ++i) {
+      String sub = String("/media") + mediaFolders[i];
+      ensureDir(sub.c_str());
+    }
+  }
+
+//----------------------------------------------------------------Helpers for webserver file handling-----------------------------------------------
+
+  static String mimeFor(const String& p_) {
+    String p = p_;
+    if (p.endsWith(".gz")) p.remove(p.length()-3);
+
+    if (p.endsWith(".html")||p.endsWith(".htm")) return "text/html";
+    if (p.endsWith(".css"))  return "text/css";
+    if (p.endsWith(".js"))   return "application/javascript";
+    if (p.endsWith(".json")) return "application/json";
+    if (p.endsWith(".svg"))  return "image/svg+xml";
+    if (p.endsWith(".png"))  return "image/png";
+    if (p.endsWith(".webp")) return "image/webp";
+    if (p.endsWith(".avif")) return "image/avif";   // if you try AVIF later
+    if (p.endsWith(".jpg")||p.endsWith(".jpeg")) return "image/jpeg";
+    if (p.endsWith(".ico"))  return "image/x-icon";
+    if (p.endsWith(".csv")||p.endsWith(".txt"))  return "text/plain";
+    return "application/octet-stream";
+  }
+
+  static void sendStaticFromWeb(AsyncWebServerRequest* req, const String& urlPath) {
+    String fsPath = urlPath.startsWith("/web/") ? urlPath : ("/web" + urlPath);
+    if (fsPath.endsWith("/")) fsPath += "index.html";
+
+    String real = fsPath;
+    { SdLock lk;
+      if (!SD.exists(real)) {
+        String gz = fsPath + ".gz";
+        if (SD.exists(gz)) real = gz;
+        else { req->send(404, "text/plain", "File Not Found"); return; }
+      }
+    }
+
+    String baseMime = mimeFor(fsPath);
+    String mime     = real.endsWith(".gz") ? baseMime : mimeFor(real);
+
+    size_t size = 0;
+    { SdLock lk; File f = SD.open(real, FILE_READ); if (!f) { req->send(404,"text/plain","File Not Found"); return; } size = f.size(); f.close(); }
+
+    SdGateGuard gate;                                   // <--- serialize whole send
+    auto* resp = req->beginResponseStream(mime, size);
+    if (real.endsWith(".gz")) { resp->addHeader("Content-Encoding","gzip"); resp->setContentType(baseMime); }
+    resp->addHeader("Cache-Control", "public, max-age=86400");
+
+    const size_t BUFSZ = 4096;
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[BUFSZ]);
+
+    { SdLock lk; File f = SD.open(real, FILE_READ);
+      while (true) {
+        size_t n = f.read(buf.get(), BUFSZ);
+        if (!n) break;
+        lk.~SdLock(); resp->write(buf.get(), n); yield(); new (&lk) SdLock;
+      }
+      f.close();
+    }
+    req->send(resp);
+  } 
+
+
+  static void sendFileFromSD(AsyncWebServerRequest* req, const String& path) {
+    { SdLock lk; if (!SD.exists(path)) { req->send(404,"text/plain","File not found"); return; } }
+
+    String mime = mimeFor(path);
+    size_t total = 0;
+    { SdLock lk; File f = SD.open(path, FILE_READ); if (!f) { req->send(404,"text/plain","File not found"); return; } total = f.size(); f.close(); }
+
+    SdGateGuard gate;                                 // <--- serialize the send
+    auto* resp = req->beginResponseStream(mime, total);
+    resp->addHeader("Accept-Ranges", "bytes");
+    resp->addHeader("Cache-Control", "public, max-age=86400");
+
+    const size_t BUFSZ = 4096;
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[BUFSZ]);
+
+    { SdLock lk; File f = SD.open(path, FILE_READ);
+      while (true) {
+        size_t n = f.read(buf.get(), BUFSZ);
+        if (!n) break;
+        lk.~SdLock(); resp->write(buf.get(), n); yield(); new (&lk) SdLock;
+      }
+      f.close();
+    }
+    req->send(resp);
+  }
+
+  static void sendFileFromSDWithMime(AsyncWebServerRequest* req,
+                                    const String& path,
+                                    const String& mime,
+                                    bool asAttachment = false)
+  {
+    { SdLock lk; if (!SD.exists(path)) { req->send(404, "text/plain", "File not found"); return; } }
+
+    size_t total = 0;
+    { SdLock lk; File f = SD.open(path, FILE_READ); if (!f) { req->send(404, "text/plain", "File not found"); return; } total = f.size(); f.close(); }
+
+    SdGateGuard gate;  // serialize whole send (no overlap with audio or other sends)
+
+    auto* resp = req->beginResponseStream(mime, total);
+    resp->addHeader("Cache-Control", "public, max-age=86400");
+    if (asAttachment) resp->addHeader("Content-Disposition", "attachment");
+
+    const size_t BUFSZ = 4096;
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[BUFSZ]);
+
+    { SdLock lk; File f = SD.open(path, FILE_READ);
+      while (true) {
+        size_t n = f.read(buf.get(), BUFSZ);
+        if (!n) break;
+        lk.~SdLock();         // release lock during network write
+        resp->write(buf.get(), n);
+        yield();
+        new (&lk) SdLock;     // re-acquire for next SD read
+      }
+      f.close();
+    }
+
+    req->send(resp);
+  }
+
+
+//-----------------------------------------------------------------------SD File Management---------------------------------------------------------
+
+  void handleRoot(AsyncWebServerRequest *request) {
+    SdLock lock; // 🔒 Protect all SD access in this function
+
+    // 1. Check /web/index.html (new standard location)
+    if (SD.exists("/web/index.html")) {
+      request->send(SD, "/web/index.html", "text/html");
+      return;
+    }
+
+    // 2. Fallback: check /index.html (legacy location)
+    if (SD.exists("/index.html")) {
+      request->send(SD, "/index.html", "text/html");
+      return;
+    }
+
+    // 3. Nothing found, list SD files
+    String message = "index.html not found on SD card.\n\nFiles on SD card:\n";
+    File root = SD.open("/");
+    if (root) {
+      File file = root.openNextFile();
+      while (file) {
+        message += String(file.name()) + "\n";
+        file = root.openNextFile();
+      }
+      root.close();
+    } else {
+      message += "(Failed to open SD root)\n";
+    }
+
+    request->send(404, "text/plain", message);
+  }
+
+
+  String ensureUniqueFilename(String path) {
+    if (!SD.exists(path.c_str())) return path;
+
+    String base = path;
+    String ext = "";
+    int dot = path.lastIndexOf('.');
+    if (dot > 0) {
+      base = path.substring(0, dot);
+      ext = path.substring(dot);
+    }
+    int i = 1;
+    while (true) {
+      String tryName = base + "(" + String(i) + ")" + ext;
+      if (!SD.exists(tryName.c_str())) return tryName;
+      i++;
+    }
+  }
+
+  void ensureFolderExists(const String& fullPath) {
+    int lastSlash = fullPath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      String folderPath = fullPath.substring(0, lastSlash);
+      if (!SD.exists(folderPath)) SD.mkdir(folderPath.c_str());
+    }
+  }
+
+  void processReindexTask() {
+      static File dir, idx;
+      static File f;
+      static bool init = false;
+      static unsigned lastBatch = 0;
+      static File tmpDir; // For counting
+
+      if (!pendingReindex) return;
+
+      SdLock lock; // 🔒 All SD access is now thread-safe
+
+      if (!init) {
+          // First, count files (async-friendly)
+          reindexCounting = true;
+          reindexReadyToIndex = false;
+          reindexTotal = 0;
+
+          if (tmpDir) tmpDir.close();
+          tmpDir = SD.open(reindexPath);
+          if (!tmpDir || !tmpDir.isDirectory()) {
+              pendingReindex = false;
+              DBG_PRINTLN("Failed to open dir for count!");
+              reindexCounting = false;
+              return;
+          }
+          File tf = tmpDir.openNextFile();
+          while (tf) {
+              String name = String(tf.name());
+              if (!name.equalsIgnoreCase("System Volume Information") && name != "Thumbs.db") {
+                  reindexTotal++;
+              }
+              tf.close();
+              tf = tmpDir.openNextFile();
+          }
+          tmpDir.close();
+          DBG_PRINTF("Counted %d files for indexing in %s\n", reindexTotal, reindexPath.c_str());
+          reindexCounting = false;
+          reindexReadyToIndex = true;
+          init = true; // Continue to actual indexing on next call
+          return;
+      }
+
+      // Only start indexing after counting done
+      if (reindexReadyToIndex && init) {
+          if (dir) dir.close();
+          if (idx) idx.close();
+          dir = SD.open(reindexPath);
+          idx = SD.open(reindexPath + "/.index", FILE_WRITE);
+          if (!dir || !dir.isDirectory() || !idx) {
+              pendingReindex = false;
+              DBG_PRINTLN("Failed to start reindex!");
+              return;
+          }
+          f = dir.openNextFile();
+          reindexCount = 0;
+          reindexReadyToIndex = false; // Reset so doesn't re-enter
+          DBG_PRINTF("Begin background indexing for %s\n", reindexPath.c_str());
+      }
+
+      if (!dir || !idx) return; // Not ready yet
+
+      const int BATCH_SIZE = 50;
+      int batchCount = 0;
+
+      while (f && batchCount < BATCH_SIZE) {
+          String name = String(f.name());
+          if (name.equalsIgnoreCase("System Volume Information") || name == "Thumbs.db") { 
+              f.close(); 
+              f = dir.openNextFile(); 
+              continue; 
+          }
+          idx.printf("%s,%d,%u,%lu\n",
+                    name.c_str(),
+                    f.isDirectory() ? 1 : 0,
+                    (unsigned)f.size(),
+                    (unsigned long)f.getLastWrite());
+          f.close();
+          f = dir.openNextFile();
+          batchCount++;
+          reindexCount++;
+      }
+
+      if (!f) {
+          if (reindexCount == 0) {
+              idx.println("__EMPTY__");
+          }
+          idx.close();
+          dir.close();
+          pendingReindex = false;
+          init = false;
+          DBG_PRINTF("Index for %s finished, %d files\n", reindexPath.c_str(), reindexCount);
+      }
+  }
+
+  // Utility: read a batch from .index file
+  void readSdIndexBatch(const String& idxPath, int start, int count, JsonArray& arr, bool showSystem /*= false*/) {
+    if (start < 0) start = 0;
+    if (count < 1) count = 1;
+
+    SdLock lock;                              // safe with recursive mutex
+    File idx = SD.open(idxPath, FILE_READ);
+    if (!idx) return;
+
+    delay(0);                                 // initial yield after open
+
+    int idxLine = 0;
+    int added   = 0;
+    uint32_t tick = 0;
+    String line;
+    bool isEmptyMarker = false;
+
+    while (idx.available()) {
+      line = idx.readStringUntil('\n');
+      line.trim();
+
+      if (line == "__EMPTY__") {               // fast exit if index marks empty dir
+        isEmptyMarker = true;
+        break;
+      }
+
+      // Skip until we reach the requested start line
+      if (idxLine++ < start) {
+        if (((++tick) & 0x7F) == 0) delay(0); // yield ~every 128 iterations
+        continue;
+      }
+
+      // --- parse: name,isFolder,size[,date] ---
+      int comma1 = line.indexOf(',');
+      int comma2 = line.indexOf(',', comma1 + 1);
+      int comma3 = line.indexOf(',', comma2 + 1); // optional date
+
+      if (comma1 < 0 || comma2 < 0) {          // malformed line
+        if (((++tick) & 0x7F) == 0) delay(0);
+        continue;
+      }
+
+      String name = line.substring(0, comma1);
+      bool isFolder = line.substring(comma1 + 1, comma2).toInt();
+
+      uint32_t size = 0;
+      uint32_t date = 0;
+      if (comma3 > 0) {
+        size = line.substring(comma2 + 1, comma3).toInt();
+        date = line.substring(comma3 + 1).toInt();
+      } else {
+        size = line.substring(comma2 + 1).toInt();
+      }
+
+      // --- filters ---
+      if (!showSystem && (
+          name.endsWith(".path") ||
+          name.endsWith(".bak")  ||
+          name.endsWith(".meta") ||
+          name.startsWith(".")   ||
+          name.startsWith(".csv")||
+          name.equalsIgnoreCase("System Volume Information") ||
+          name.startsWith("FOUND.") ||
+          name == "Thumbs.db"
+      )) {
+        if (((++tick) & 0x7F) == 0) delay(0);
+        continue;
+      }
+
+      // Pagination: stop once we’ve added 'count' items
+      if (added >= count) break;
+
+      // Build JSON entry
+      JsonObject obj = arr.createNestedObject();
+      obj["name"]     = name;
+      obj["isFolder"] = isFolder;
+      if (!isFolder) obj["size"] = size;
+      obj["type"]     = isFolder ? "folder" : "default";
+      if (date > 0)   obj["date"] = (uint32_t)date * 1000; // seconds -> ms
+
+      added++;
+
+      if (((++tick) & 0x7F) == 0) delay(0);     // periodic yield to feed WDT
+    }
+
+    idx.close();
+    delay(0);                                   // final cooperative yield
+
+    // If __EMPTY__ marker encountered and nothing was added, leave arr empty
+    if (isEmptyMarker && arr.size() == 0) {
+      // intentionally empty
+    }
+  }
+
+
+  // helpers to Fix upload corruption-----
+
+  // ---------- SD helpers ----------
+  static String baseName(const String& path) {
+    int s = path.lastIndexOf('/'); return (s >= 0) ? path.substring(s + 1) : path;
+  }
+  static String dirName(const String& path) {
+    int s = path.lastIndexOf('/'); return (s >= 0) ? path.substring(0, s) : String("/");
+  }
+  static String uniqueInDir(const String& dir, const String& wantName) {
+    String base = wantName, ext;
+    int d = wantName.lastIndexOf('.');
+    if (d >= 0) { base = wantName.substring(0, d); ext = wantName.substring(d); }
+    String test = dir + "/" + wantName; int n = 1;
+    while (SD.exists(test)) test = dir + "/" + base + "_" + String(n++) + ext;
+    return test;
+  }
+  static inline void sdTinyYield(uint32_t ms = 2) {
+  #if defined(ESP32)
+    vTaskDelay(pdMS_TO_TICKS(ms));
+  #else
+    delay(ms);
+  #endif
+  }
+
+  void initSdGate() {
+    g_sdStreamGate = xSemaphoreCreateBinary();
+    xSemaphoreGive(g_sdStreamGate); // gate is free at boot
+  }
+
+  // ---------- HEX helpers ----------
+  static String toHexLower(const uint8_t* p, size_t n) {
+    static const char* hexd = "0123456789abcdef";
+    String s; s.reserve(n*2);
+    for (size_t i=0;i<n;i++){ s += hexd[p[i]>>4]; s += hexd[p[i]&0x0F]; }
+    return s;
+  }
+  static String normHex64(String s) { s.trim(); s.toLowerCase(); return s; }
+
+  // ---------- Boot cleanup: delete orphan temp files ----------
+  static void removeOrphanTempsInDir(const String& path) {
+    File dir; { SdLock lock; dir = SD.open(path); }
+    if (!dir) return;
+
+    while (true) {
+      File f; { SdLock lock; f = dir.openNextFile(); }
+      if (!f) break;
+
+      String name = f.name();
+      bool isDir = f.isDirectory();
+      f.close();                  // close before any yield
+
+      if (isDir) {
+        if (name != "." && name != "..") {
+          // Recurse into subdir
+          removeOrphanTempsInDir(path + "/" + name);
+        }
+      } else {
+        if (name.endsWith(".upload.tmp")) {
+          String doomed = path + "/" + name;
+          { SdLock lock; SD.remove(doomed); }   // lock only around SD op
+          DBG_PRINTF("[CLEAN] removed orphan temp: %s\n", doomed.c_str());
+        }
+      }
+
+      // Give the scheduler a breath after each entry (no SD lock held)
+  #if defined(ESP32)
+      vTaskDelay(1);
+  #else
+      yield();
+  #endif
+    }
+
+    dir.close();
+  }
+
+  void auditPcmAssets() {
+    const char* req[] = {"0.wav","1.wav","2.wav","3.wav","4.wav","5.wav","6.wav","7.wav","8.wav","9.wav","dot.wav","apaudio.wav","connected.wav"};
+    for (auto f : req) {
+      String p = String("/web/pcm/") + f;
+      if (!SD.exists(p)) {
+        String pu = p; pu.replace(".wav",".WAV");
+        if (!SD.exists(pu)) DBG_PRINTF("[PCM MISSING] %s (or %s)\n", p.c_str(), pu.c_str());
+      }
+    }
+  }
+
+      static bool pR1=false, pR2=false, pL1=false, pL2=false;
+      static bool pA=false, pB=false, pX=false, pY=false;
+
+      bool r1 = ctl->r1();
+      bool r2 = ctl->r2();
+      bool l1 = ctl->l1();
+      bool l2 = ctl->l2();
+
+      bool a  = ctl->a();
+      bool b  = ctl->b();
+      bool x  = ctl->x();
+      bool y  = ctl->y();
+
+      // Shoulder / triggers
+      joyEdgeDispatch("R1",       r1, pR1);
+      joyEdgeDispatch("R2_CLICK", r2, pR2);
+      joyEdgeDispatch("L1",       l1, pL1);
+      joyEdgeDispatch("L2_CLICK", l2, pL2);
+
+      // Face buttons
+      joyEdgeDispatch("A", a, pA);
+      joyEdgeDispatch("B", b, pB);
+      joyEdgeDispatch("X", x, pX);
+      joyEdgeDispatch("Y", y, pY);
+
+      // --- (Optional) add START/BACK if your controller API exposes them ---
+      // Example (uncomment if ctl->start() / ctl->back() exist):
+      /*
+      static bool pStart=false, pBack=false;
+      bool start = ctl->start();
+      bool back  = ctl->back();
+      joyEdgeDispatch("BTN_START", start, pStart);
+      joyEdgeDispatch("BTN_BACK",  back,  pBack);
+      */
+
+      // --- (Optional) D-Pad mapping ---
+      // If your API gives discrete booleans (e.g. ctl->dpadUp()), wire them like below:
+      /*
+      static bool pDU=false, pDD=false, pDL=false, pDR=false;
+      joyEdgeDispatch("DPAD_UP",    ctl->dpadUp(),    pDU);
+      joyEdgeDispatch("DPAD_DOWN",  ctl->dpadDown(),  pDD);
+      joyEdgeDispatch("DPAD_LEFT",  ctl->dpadLeft(),  pDL);
+      joyEdgeDispatch("DPAD_RIGHT", ctl->dpadRight(), pDR);
+      */
+      // If you only have an enum-based dpad(), add a small switch that sets four booleans and call joyEdgeDispatch for each.
+    }
+
+
+  //#endif
+
+//-----------------------------------------------------------------------Robot I2S Audio------------------------------------------------------------
+
+  void stopAudio() {
+    audio.stopSong();
+    digitalWrite(I2S_SPK_PA, LOW);
+    playbackStarted = false;
+
+    // Release exclusive SD if we own it
+    if (g_gateHeldByAudio) {
+      g_gateHeldByAudio = false;
+      xSemaphoreGive(g_sdStreamGate);
+    }
+  }
+
+
+    // Call once when enabling mic (after i2s_driver_install)
+  void setupI2SMic() {
+    static const i2s_config_t i2s_config = {
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+      .sample_rate = I2S_SAMPLE_RATE,
+      .bits_per_sample = I2S_SAMPLE_BITS,
+      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .communication_format = I2S_COMM_FORMAT_I2S,
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+      .dma_buf_count = 4,
+      .dma_buf_len = 256,
+      .use_apll = false,
+      .tx_desc_auto_clear = false,
+      .fixed_mclk = 0
+    };
+    static const i2s_pin_config_t pin_config = {
+      .bck_io_num = I2S_MIC_SCK,
+      .ws_io_num  = I2S_MIC_WS,
+      .data_out_num = -1,
+      .data_in_num  = I2S_MIC_SD
+    };
+
+    i2s_driver_install(MY_I2S_PORT, &i2s_config, 0, NULL);
+    i2s_set_pin(MY_I2S_PORT, &pin_config);
+    i2s_zero_dma_buffer(MY_I2S_PORT);
+
+    if (!micBuf) {
+  #if USE_PSRAM
+      micBuf = (int16_t*)ps_malloc(micBufBytes);
+  #else
+      micBuf = (int16_t*)malloc(micBufBytes);
+  #endif
+    }
+    micLastSendMs = millis();
+  }
+
+  void enableMic() {
+    if (currentI2SMode == I2S_MIC) { DBG_PRINTLN("[I2S] Mic already enabled."); return; }
+    DBG_PRINTLN("[I2S] Switching to MIC: stopping audio, uninstalling I2S, and initializing mic...");
+    stopAudio();
+    esp_err_t res = i2s_driver_uninstall(MY_I2S_PORT);
+    if (res == ESP_OK)          DBG_PRINTLN("[I2S] I2S driver uninstalled successfully (for MIC).");
+    else if (res == ESP_ERR_INVALID_STATE) DBG_PRINTLN("[I2S] I2S driver not installed, nothing to uninstall.");
+    else                      DBG_PRINTF("[I2S] I2S driver uninstall for MIC returned code: %d\n", res);
+
+    setupI2SMic();
+    currentI2SMode = I2S_MIC;
+    DBG_PRINTLN("[I2S] MIC enabled and ready.");
+  }
+
+  void disableMic() {
+    if (currentI2SMode == I2S_MIC) {
+      DBG_PRINTLN("[I2S] Disabling MIC: uninstalling I2S driver...");
+      esp_err_t res = i2s_driver_uninstall(MY_I2S_PORT);
+      if (res == ESP_OK) DBG_PRINTLN("[I2S] I2S driver uninstalled successfully (MIC off).");
+      else               DBG_PRINTF("[I2S] I2S driver uninstall for MIC returned code: %d\n", res);
+      currentI2SMode = I2S_NONE;
+    } else {
+      DBG_PRINTLN("[I2S] MIC not enabled, nothing to disable.");
+    }
+    if (micBuf) { free(micBuf); micBuf = nullptr; }
+  }
+
+  void streamMicToWebSocket() {
+    if (soundIsPlaying()) return;
+    if (!micStreamActive) return;
+    if (currentI2SMode != I2S_MIC) return;
+
+    // Only if someone’s listening
+    if (wsCarInput.count() == 0) {
+      // Small sleep to avoid spinning CPU if called in a tight loop
+      delay(1);
+      return;
+    }
+
+    // Throttle a bit (e.g., ~50 packets/sec) to avoid WS queue piling up
+    const uint32_t now = millis();
+    if (now - micLastSendMs < 20) return;
+
+    if (!micBuf) return; // should not happen; safety
+
+    size_t bytesRead = 0;
+    // Short timeout; don't block the async loop
+    esp_err_t res = i2s_read(MY_I2S_PORT,
+                            (void*)micBuf,
+                            micBufBytes,
+                            &bytesRead,
+                            10 / portTICK_PERIOD_MS);
+
+    if (res == ESP_OK && bytesRead > 0) {
+      // Send as binary; clients that don't care (UI) ignore non-text frames
+      wsCarInput.binaryAll((uint8_t*)micBuf, bytesRead);
+      micLastSendMs = now;
+    }
+
+    // Cooperative yield
+    delay(0);
+  }
+
+
+  void playWavFileOnSpeaker(const String& filename) {
+    DBG_PRINTF("[AUDIO] playWavFileOnSpeaker: %s\n", filename.c_str());
+    { SdLock lk; if (!SD.exists(filename.c_str())) { DBG_PRINTF("[ERROR] File not found on SD: %s\n", filename.c_str()); return; } }
+
+    // If long media is playing, pause it and mark that we’ll need to resume
+    if (audio.isRunning() && !isSystemSoundPlaying) {
+      pauseAudio();                 // you already restart from start; good enough
+      g_mediaPausedBySystem = true; // remember to resume afterwards
+    }
+
+    // Take exclusive SD gate for this short system sound
+    xSemaphoreTake(g_sdStreamGate, portMAX_DELAY);
+    g_gateHeldByAudio = true;
+
+    disableMic();
+    stopAudio();
+    delay(60);
+    enableSpeaker();
+    audio.setVolume(sSndVolume);    // you already do this in queue path
+    audio.connecttoFS(SD, filename.c_str());
+
+    currentlyPlayingFile = filename;
+    lastMediaProgressSend = 0;
+    delay(30);
+
+    if (!audio.isRunning()) DBG_PRINTLN("[AUDIO] Playback did not start!");
+    else DBG_PRINTLN("[AUDIO] Playback started OK.");
+    isSystemSoundPlaying = true;
+  }
+
+
+  void makeWavHeader(uint8_t* header, int sampleRate, int channels, int bitsPerSample, uint32_t dataLength) {
+      // PCM WAV header
+      uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
+      uint16_t blockAlign = channels * bitsPerSample / 8;
+      memcpy(header, "RIFF", 4);
+      uint32_t chunkSize = 36 + dataLength;
+      memcpy(header+4, &chunkSize, 4);
+      memcpy(header+8, "WAVE", 4);
+      memcpy(header+12, "fmt ", 4);
+      uint32_t subChunk1Size = 16;
+      memcpy(header+16, &subChunk1Size, 4);
+      uint16_t audioFormat = 1;
+      memcpy(header+20, &audioFormat, 2);
+      memcpy(header+22, &channels, 2);
+      memcpy(header+24, &sampleRate, 4);
+      memcpy(header+28, &byteRate, 4);
+      memcpy(header+32, &blockAlign, 2);
+      memcpy(header+34, &bitsPerSample, 2);
+      memcpy(header+36, "data", 4);
+      memcpy(header+40, &dataLength, 4);
+  }
+
+  // This is your speaker setup from audio library
+  void enableSpeaker() {
+      // Always ensure amp enable pin is set before playback
+      pinMode(I2S_SPK_PA, OUTPUT);
+      digitalWrite(I2S_SPK_PA, HIGH);  // Enable NS4168 PA
+
+      if (currentI2SMode == I2S_SPEAKER) {
+          DBG_PRINTLN("[I2S] Speaker already enabled.");
+          return;
+      }
+      DBG_PRINTLN("[I2S] Switching to SPEAKER: stopping audio, uninstalling I2S, and initializing speaker...");
+
+      // Always stop audio regardless of state
+      audio.stopSong();
+
+      // Only uninstall if previously MIC or SPEAKER was initialized
+      if (currentI2SMode != I2S_NONE) {
+          esp_err_t res = i2s_driver_uninstall(MY_I2S_PORT);
+          delay(20); // Allow I2S peripheral to settle
+          if (res == ESP_OK) {
+              DBG_PRINTLN("[I2S] I2S driver uninstalled successfully (for SPEAKER).");
+          } else {
+              DBG_PRINTF("[I2S] I2S driver uninstall for SPEAKER returned code: %d\n", res);
+          }
+      }
+
+      // Re-setup speaker I2S pinout and volume every time
+      audio.setPinout(I2S_SPK_BCLK, I2S_SPK_LRCK, I2S_SPK_SD); // (10, 45, 9)
+      audio.setVolume(15);  // Use your tested value (or 21 for max)
+      currentI2SMode = I2S_SPEAKER;
+      DBG_PRINTLN("[I2S] SPEAKER enabled and ready.");
+  }
+
+  void sendDeviceMediaProgress() {
+      // Only send if playing a file
+      if (currentlyPlayingFile.length() > 0 && audio.isRunning()) {
+          unsigned long now = millis();
+          if (now - lastMediaProgressSend > 500) {  // Send progress update every 0.5s
+              lastMediaProgressSend = now;
+              // Duration and position may not be available in Audio.h; if so, just fake for now
+              int duration = audio.getAudioFileDuration() / 1000; // seconds (implement this if not present)
+              int pos = audio.getAudioCurrentTime() / 1000; // seconds (implement this if not present)
+              wsCarInput.textAll("MEDIA_DEVICE_PROGRESS," + currentlyPlayingFile + "," + String(pos) + "," + String(duration));
+          }
+      }
+  }
+
+  void pauseAudio() {
+    if (audio.isRunning()) {
+      audio.stopSong();
+      isPaused = true;
+      DBG_PRINTLN("[AUDIO] Paused (returns to start on resume)");
+    }
+    playbackStarted = false;
+  }
+
+  void resumeAudio() {
+    if (!isPaused || playlist.empty()) return;
+    DBG_PRINTF("[AUDIO] Resuming %s from start\n", playlist[currentTrack].c_str());
+
+    // Take exclusive SD for long media playback
+    xSemaphoreTake(g_sdStreamGate, portMAX_DELAY);
+    g_gateHeldByAudio = true;
+
+    enableSpeaker();
+    audio.connecttoFS(SD, playlist[currentTrack].c_str());
+    playbackStarted = true;
+    isPaused = false;
+  }
+
+
+  void playCurrentTrack() {
+      if (playlist.empty() || currentTrack < 0 || currentTrack >= playlist.size()) {
+          DBG_PRINTLN("[playCurrentTrack] Playlist empty or currentTrack invalid!");
+          return;
+      }
+      String filename = playlist[currentTrack];
+      if (!filename.startsWith("/media/")) filename = "/media/mp3/" + filename;
+
+      playWavFileOnSpeaker(filename);
+      playbackStarted = true;
+      isPaused = false;
+  }
+
+  void nextTrack() {
+      if (playlist.empty()) return;
+      if (shuffleMode) {
+          int nextIdx;
+          do {
+              nextIdx = random(0, playlist.size());
+          } while (playlist.size() > 1 && nextIdx == currentTrack);
+          currentTrack = nextIdx;
+      } else {
+          currentTrack++;
+          if (currentTrack >= (int)playlist.size()) {
+              if (loopMode) currentTrack = 0;
+              else { audio.stopSong(); isPaused = false; return; }
+          }
+      }
+      playCurrentTrack();
+  }
+
+  void prevTrack() {
+    if (playlist.empty()) return;
+    if (shuffleMode) {
+      int prevIdx;
+      do {
+        prevIdx = random(0, playlist.size());
+      } while (playlist.size() > 1 && prevIdx == currentTrack);
+      currentTrack = prevIdx;
+    } else {
+      currentTrack--;
+      if (currentTrack < 0) {
+        if (loopMode) currentTrack = playlist.size() - 1;
+        else { audio.stopSong(); isPaused = false; return; }
+      }
+    }
+    playCurrentTrack();
+  }
+
+  void setVolume(int vol) {
+    if (vol < 0) vol = 0;
+    if (vol > 21) vol = 21;
+    currentVolume = vol;
+    audio.setVolume(currentVolume);
+    DBG_PRINTF("[VOLUME] %d\n", currentVolume);
+  }
+
+  void randomTrack() {
+    if (playlist.empty()) return;
+    currentTrack = random(0, playlist.size());
+    DBG_PRINTF("[RANDOM] %s (Volume: %d)\n", playlist[currentTrack].c_str(), currentVolume);
+    playCurrentTrack();
+  }
+
+  void nextFolder() {
+    if (folderIndex.size() <= 1) {
+      DBG_PRINTLN("Only one folder in list.");
+      return;
+    }
+    // Find which folder currentTrack is in
+    int folder = 0;
+    for (int i = 0; i < (int)folderIndex.size(); ++i) {
+      if (currentTrack < (i + 1 < (int)folderIndex.size() ? folderIndex[i + 1] : (int)playlist.size())) {
+        folder = i;
+        break;
+      }
+    }
+    folder = (folder + 1) % folderIndex.size();
+    currentTrack = folderIndex[folder];
+    DBG_PRINTF("[NEXTFOLDER] Now playing from folder %s\n", mediaFolders[folder]);
+    playCurrentTrack();
+  }
+
+  void resetESP() {
+    DBG_PRINTLN("Resetting ESP32...");
+    delay(200);
+    ESP.restart();
+  }
+
+
+//-------------------------------------------------------------------------PSRAM VERSION------------------------------------------------------------
+
+  bool loadPlaylistFromIndex(const char* folder) {
+      SdLock lock; // 🔒 protect SD card access
+
+      playlist.clear();
+      String indexPath = String(folder) + "/.index";
+      File idx = SD.open(indexPath);
+      if (!idx) {
+          DBG_PRINTF("[ERROR] Can't open index: %s\n", indexPath.c_str());
+          return false;
+      }
+
+      char lineBuf[256]; // Reasonable max line size for filenames
+      size_t lineLen = 0;
+
+      while (idx.available()) {
+          lineLen = idx.readBytesUntil('\n', lineBuf, sizeof(lineBuf) - 1);
+          lineBuf[lineLen] = '\0';
+
+          // Remove trailing CR/LF/spaces/tabs
+          while (lineLen > 0 && 
+                (lineBuf[lineLen - 1] == '\r' || lineBuf[lineLen - 1] == ' ' || lineBuf[lineLen - 1] == '\t')) {
+              lineBuf[--lineLen] = '\0';
+          }
+          if (lineLen == 0) continue;
+
+          // Find first comma and cut it off
+          char* firstComma = strchr(lineBuf, ',');
+          if (firstComma) *firstComma = '\0';
+
+          // Trim leading spaces/tabs
+          char* fileOnly = lineBuf;
+          while (*fileOnly == ' ' || *fileOnly == '\t') ++fileOnly;
+
+          // Trim trailing spaces/tabs
+          char* end = fileOnly + strlen(fileOnly) - 1;
+          while (end > fileOnly && (*end == ' ' || *end == '\t')) *end-- = '\0';
+
+          // Build full path
+          String fullPath;
+          if (fileOnly[0] == '/') {
+              fullPath = fileOnly;
+          } else {
+              fullPath.reserve(strlen(folder) + 1 + strlen(fileOnly));
+              fullPath = folder;
+              if (!fullPath.isEmpty() && fullPath[fullPath.length() - 1] != '/') fullPath += '/';
+              fullPath += fileOnly;
+          }
+
+          playlist.push_back(fullPath); // PSRAM-friendly push_back
+      }
+
+      idx.close();
+      currentTrack = 0;
+      return !playlist.empty();
+  }
+
+
+//-------------------------------------------------------------------------Firmware OTA-------------------------------------------------------------
+
+  void otaUpdate(){
+      // OTA (unchanged)
+    ElegantOTA.begin(&server);  // Works with AsyncWebServer
+    DBG_PRINTLN("OTA ready: http://<device_ip>/update");
+    ElegantOTA.onEnd([](bool success) {
+        DBG_PRINTLN("ElegantOTA finished, restarting...");
+        //keymapPrefs.end();
+        //preferences.end();
+        delay(500);
+        ESP.restart();
+    });
+  }
+
+  String urlDecode(String input) {
+      String s = "";
+      char a, b;
+      for (size_t i = 0; i < input.length(); i++) {
+          if ((input[i] == '%') && ((a = input[i + 1]) && (b = input[i + 2])) &&
+              (isxdigit(a) && isxdigit(b))) {
+              if (a >= 'a') a -= 'a' - 'A';
+              if (a >= 'A') a = a - 'A' + 10;
+
+//-------------------------------------------------------------------------System Sound-------------------------------------------------------------
+
+  void playSystemSound(const char* filename) {
+      if (!sSndEnabled || !filename || !filename[0]) return;
+
+      // NEW: drop any enqueues while exclusive, except the ones we are explicitly allowing now
+      if (ss_exclusive && !ss_allow) return;
+
+      unsigned long now = millis();
+      // Ignore if file is same and within debounce period
+      if (lastPlayedFile == filename && (now - lastPlayedTime < soundRepeatDelay)) return;
+
+      // If something is playing, enqueue the request if there's space
+      if (isSystemSoundPlaying) {
+          // Add to queue only if not a duplicate in the queue
+          for (uint8_t i = queueHead; i != queueTail; i = (i + 1) % MAX_SYSTEM_SOUND_QUEUE) {
+              if (systemSoundQueue[i] == filename) return; // Already in queue
+          }
+          uint8_t nextTail = (queueTail + 1) % MAX_SYSTEM_SOUND_QUEUE;
+          if (nextTail != queueHead) { // Queue not full
+              systemSoundQueue[queueTail] = filename;
+              queueTail = nextTail;
+          }
+          return;
+      }
+
+      // Not playing, start playing this one
+      sSndVolume = constrain(sSndVolume, 0, 21);
+      audio.setVolume(sSndVolume);
+      isSystemSoundPlaying = true;
+      lastPlayedFile = filename;
+      lastPlayedTime = now;
+      playWavFileOnSpeaker(filename); // This should be non-blocking
+  }
+
+  void onSystemSoundFinished() {
+    isSystemSoundPlaying = false;
+
+    // Release exclusive gate held for the beep
+    if (g_gateHeldByAudio) {
+      g_gateHeldByAudio = false;
+      xSemaphoreGive(g_sdStreamGate);
+    }
+
+    // Chain next system sound if queued (they’ll preempt again)
+    if (queueHead != queueTail) {
+      String nextFile = systemSoundQueue[queueHead];
+      queueHead = (queueHead + 1) % MAX_SYSTEM_SOUND_QUEUE;
+      playSystemSound(nextFile.c_str());
+      return;
+    }
+
+    // If we paused media to play the system sound, resume it now
+    if (g_mediaPausedBySystem) {
+      g_mediaPausedBySystem = false;
+      resumeAudio();  // your resume starts track from the beginning; acceptable
+    }
+    if (ss_exclusive && (queueHead == queueTail) && !audio.isRunning() && !isSystemSoundPlaying) {
+      ss_exclusive = false;
+    }    
+  }
+
+  // Speak an IP address by queueing WAV digits + a dot sound
+  inline bool soundIsPlaying() {
+    // Your code already has isSystemSoundPlaying; double-guard with audio.isRunning()
+    return isSystemSoundPlaying || audio.isRunning();
+  }
+
+  void scheduleApSpeechSoon(uint32_t delayMs = SS_AP_FINAL_DELAY_MS) {
+    ss_samSpeechPending = false;
+    ss_finalSpeechArmed = true;
+    ss_finalSpeechIsSta = false;
+    ss_finalSpeechAtMs  = millis() + delayMs;
+    ss_finalSpeechIp    = WiFi.softAPIP();
+  }
+
+  void speakStaIpOrDefer(const IPAddress& ip) {
+    ss_samSpeechPending = false;
+
+    ss_finalSpeechArmed = true;
+    ss_finalSpeechIsSta = true;
+    ss_finalSpeechAtMs  = millis() + SS_STA_FINAL_DELAY_MS;
+    ss_finalSpeechIp    = ip;
+  }
+
+  void pumpSystemSoundScheduler(uint32_t now) {
+    if (ss_finalSpeechArmed && (int32_t)(now - ss_finalSpeechAtMs) >= 0 && !soundIsPlaying() && !ss_samActive) {
+      bool speakSta = ss_finalSpeechIsSta && WiFi.status() == WL_CONNECTED;
+      IPAddress ip = speakSta ? WiFi.localIP() : ((WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) ? WiFi.softAPIP() : ss_finalSpeechIp);
+      if (!speakSta && !(WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)) {
+        DBG_PRINTLN("[TTS] Skipping AP IP speech; AP not active");
+      } else {
+        ss_exclusive = true;
+        ss_allow     = true;
+        ss_fastMode  = false;
+        queueHead = queueTail = 0;
+
+        playSystemSound(speakSta ? "/web/pcm/connected.wav" : "/web/pcm/apaudio.wav");
+
+        ss_samSpeechIp = ip;
+        ss_samSpeechText = buildSamIpPhrase(ip, speakSta);
+        if (ss_samSpeechText.length()) {
+          ss_samSpeechIsSta = speakSta;
+          ss_samSpeechPending = true;
+        } else {
+          ss_allow = false;
+          ss_exclusive = false;
+          DBG_PRINTLN("[TTS] Empty IP phrase; skipping");
+        }
+      }
+      ss_finalSpeechArmed = false;
+    }
+
+    if (ss_useSamTts && !ss_samActive && ss_samSpeechPending && !soundIsPlaying()) {
+      IPAddress ip = ss_samSpeechIp;
+      String phrase = ss_samSpeechText;
+      ss_samSpeechPending = false;
+      bool prevAllow = ss_allow;
+      bool prevExclusive = ss_exclusive;
+      ss_exclusive = true;
+      ss_allow = true;
+      if (phrase.length()) {
+        speakSamTextBlocking(ip, phrase, true, ss_samSpeechIsSta);
+      }
+      ss_allow = prevAllow;
+      ss_exclusive = prevExclusive;
+    }
+  }
+
+
+
+
+  static bool ensureSamReady() {
+    if (!ss_useSamTts) return false;
+    if (!ss_samOutput) {
+      ss_samOutput = new AudioOutputI2S();
+      if (!ss_samOutput) return false;
+      ss_samOutput->SetPinout(I2S_SPK_BCLK, I2S_SPK_LRCK, I2S_SPK_SD);
+      ss_samOutput->SetOutputModeMono(true);
+      ss_samOutput->SetBitsPerSample(16);
+      ss_samOutput->SetRate(22050);
+    }
+    if (!ss_samVoice) {
+      ss_samVoice = new ESP8266SAM();
+      if (!ss_samVoice) return false;
+      ss_samVoice->SetVoice(ESP8266SAM::VOICE_ROBOT);
+    }
+    return ss_samOutput && ss_samVoice;
+  }
+
+  void speakSamTextBlocking(const IPAddress& ip, const String& text, bool fastChain, bool isSta) {
+    if (!ss_useSamTts) {
+      DBG_PRINTLN("[TTS] Disabled; skipping spoken IP");
+      return;
+    }
+
+    String phrase = text;
+    phrase.trim();
+    if (phrase.length() == 0) {
+      DBG_PRINTLN("[TTS] Empty phrase; skipping spoken IP");
+      return;
+    }
+
+    if (!ensureSamReady()) {
+      DBG_PRINTLN("[TTS] SAM init failed; disabling spoken IP");
+      ss_useSamTts = false;
+      return;
+    }
+
+    bool prevAllow = ss_allow;
+    ss_allow = true;
+
+    bool pausedMedia = false;
+    if (audio.isRunning() && !isSystemSoundPlaying) {
+      pauseAudio();
+      g_mediaPausedBySystem = true;
+      pausedMedia = true;
+    }
+
+    xSemaphoreTake(g_sdStreamGate, portMAX_DELAY);
+    g_gateHeldByAudio = true;
+
+    if (!fastChain) {
+      disableMic();
+    }
+
+    stopAudio();
+    delay(fastChain ? 5 : 60);
+    enableSpeaker();
+
+    ss_samOutput->SetGain(samGainFromVolume(sSndVolume));
+    ss_samOutput->SetRate(22050);
+    ss_samOutput->begin();
+
+    ss_samActive = true;
+    isSystemSoundPlaying = true;
+    DBG_PRINTF("[TTS] Speaking phrase: %s\n", phrase.c_str());
+
+    ss_samVoice->Say(ss_samOutput, phrase.c_str());
+
+    ss_lastSpokenIp = ip;
+    ss_lastSpokenIsSta = isSta;
+    ss_hasSpokenAnyIp  = true;
+
+    ss_samOutput->flush();
+    ss_samOutput->stop();
+
+    ss_samActive = false;
+    isSystemSoundPlaying = false;
+
+    if (g_gateHeldByAudio) {
+      g_gateHeldByAudio = false;
+      xSemaphoreGive(g_sdStreamGate);
+    }
+
+    ss_allow = prevAllow;
+
+    onSystemSoundFinished();
+  }
+
+  void speakLastKnownIp() {
+    if (ss_useSamTts && ss_hasSpokenAnyIp) {
+      String phrase = buildSamIpPhrase(ss_lastSpokenIp, ss_lastSpokenIsSta);
+      speakSamTextBlocking(ss_lastSpokenIp, phrase, true, ss_lastSpokenIsSta);
+      return;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      speakStaIpOrDefer(WiFi.localIP());
+    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+      IPAddress ip = WiFi.softAPIP();
+      ss_finalSpeechArmed = true;
+      ss_finalSpeechIsSta = false;
+      ss_finalSpeechAtMs  = millis();
+      ss_finalSpeechIp    = ip;
+    } else {
+      DBG_PRINTLN("[TTS] No IP available to speak");
+    }
+  }
+
+
+
+
+
+
+
