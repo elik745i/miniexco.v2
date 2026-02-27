@@ -5,6 +5,11 @@ Firmware for the MiniExco rover running on ESP32-S3-SPK v1.0 (8 MB PSRAM / 16 MB
 
 ![MiniExco rover](docs/images/mini-exco-youtube.jpg)
 
+Project Lineage
+---------------
+MiniExco is a deep modification and extension of the MiniSkidi project:
+- Original base project: https://github.com/ProfBoots/V2.0-3D-Printed-RC-SkidSteer
+
 Cooling Requirement
 -------------------
 - The ESP32-S3 runs hot under Wi-Fi + camera + SD + audio load. Install **both** a metal heatsink on the ESP32-S3 and a low-profile 25 mm 5 V fan before long runs.
@@ -37,6 +42,19 @@ Key Features
 - Bluepad32 Bluetooth gamepad support (optional)
 - Home Assistant discovery + MQTT telemetry (configurable)
 - OTA updates (ElegantOTA)
+
+Recent Changes (v2.01.01)
+-------------------------
+- Fixed arm motor power drop after servo usage by isolating servo timer configuration from arm motor PWM timing.
+- Added servo auto-detach runtime handler in main loop (prevents servos staying attached indefinitely).
+- Added servo/motor GPIO conflict guards to block unsafe mixed pin assignments.
+- Improved arm jog controls in frontend:
+  - jog command uses full-scale PWM (`255`)
+  - reduced accidental release-to-zero behavior during press/hold interaction
+- Frontend widget updates:
+  - fixed scaled-widget drag anchor offset
+  - fixed scaled-widget boundary placement consistency
+  - smoothed widget scale transitions and post-scale settle behavior
 
 Recent Additions (v2.1.01)
 --------------------------
@@ -142,6 +160,7 @@ Serial Commands (v2.0.98)
 
 Revision History (highlights)
 -----------------------------
+- v2.01.01: Arm/servo PWM interference fix, servo auto-detach loop handling, GPIO conflict guards, arm jog/full-power frontend tweak, and scaled-widget drag/settle fixes.
 - v2.1.01: Telemetry CSV rotation/append fixes, SD recycle recover handler fix, SD file-manager search feature, and toolbar single-line layout stabilization.
 - v2.0.98: Widget framework/refactor, gravity/drag modes, View tab controls and previews, expandable panel behavior fixes, memory stability improvements.
 - v2.0.94: Media library listing stabilized for large SD collections; robust paging and UI timeout recovery.
@@ -184,6 +203,7 @@ TODO
 
 References
 ----------
+- MiniSkidi base project (original): https://github.com/ProfBoots/V2.0-3D-Printed-RC-SkidSteer
 - Bluepad32 docs: https://bluepad32.readthedocs.io/en/latest/  
 - Bluepad32 GitHub: https://github.com/ricardoquesada/bluepad32
 - ESP32-S3-SPK v1.0 3D model: https://grabcad.com/library/esp32-spk-v1-0-1
