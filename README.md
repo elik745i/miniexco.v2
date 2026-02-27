@@ -162,7 +162,7 @@ Build & Upload (Arduino / VS Code)
 ----------------------------------
 1. Install ESP32 board support (esp32 2.0.14+).  
 2. Board: ESP32-S3-SPK / ESP32-S3 with PSRAM enabled; flash 16 MB; partition `app3M_fat9M_16MB`; CPU 240 MHz.  
-3. Open `MiniExco_v_2_00_98.ino`, set `port` in `.vscode/arduino.json`, click Verify/Upload.  
+3. Open `MiniExco_v_2_01_01.ino`, set `port` in `.vscode/arduino.json`, click Verify/Upload.  
 4. If upload stalls at “Connecting…”, hold BOOT (GPIO0) while clicking Upload; release when “Connecting…” appears.
 
 Feature Switches (build-time)
