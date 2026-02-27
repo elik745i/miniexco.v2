@@ -9987,9 +9987,10 @@ unsigned long wifiConnectStartTime = 0;
       static unsigned long lastTelemetrySend = 0;
       static float filteredBatteryVoltage = 0;
       static float filteredChargerVoltage = 0;
+      static bool chargerDetected = false;
       const float filterAlpha = 0.15; // 0.05–0.3, lower = smoother, slower
 
-      if (!audio.isRunning() && millis() - lastTelemetrySend > 1000) {
+      if (millis() - lastTelemetrySend > 1000) {
           lastTelemetrySend = millis();
 
           int adcRaw = analogRead(BLevel);
@@ -10019,19 +10020,23 @@ unsigned long wifiConnectStartTime = 0;
           int wifiQuality = constrain(2 * (rssi + 100), 0, 100);
 
           const char* chargingStatus = "UNKNOWN";
+          static const int CHARGE_RAW_ON  = 1400;
+          static const int CHARGE_RAW_OFF = 1000;
+          if (adcRawCharging >= CHARGE_RAW_ON) chargerDetected = true;
+          else if (adcRawCharging <= CHARGE_RAW_OFF) chargerDetected = false;
 
           // --- CHARGER & SOUND LOGIC ---
-          if (filteredChargerVoltage > 4) {
+          if (chargerDetected) {
               chargingStatus = "YES";
               isCharging = true;
               if (!wasCharging) {
-                  playSystemSound("/web/pcm/charging.wav");
+                  if (!audio.isRunning()) playSystemSound("/web/pcm/charging.wav");
                   wasCharging = true;
                   endChargingPlayed = false;
               }
               if (batteryPercent >= 100) {
                   if (!chargingCompletePlayed) {
-                      playSystemSound("/web/pcm/chargeComplete.wav");
+                      if (!audio.isRunning()) playSystemSound("/web/pcm/chargeComplete.wav");
                       chargingCompletePlayed = true;
                   }
                   wasFullyCharged = true;
@@ -10039,25 +10044,17 @@ unsigned long wifiConnectStartTime = 0;
                   chargingCompletePlayed = false;
                   wasFullyCharged = false;
               }
-          } else if (filteredChargerVoltage < 2.5) {
+          } else {
               chargingStatus = "NO";
               isCharging = false;
               if (wasCharging) {
                   if (!endChargingPlayed) {
-                      playSystemSound("/web/pcm/endCharging.wav");
+                      if (!audio.isRunning()) playSystemSound("/web/pcm/endCharging.wav");
                       endChargingPlayed = true;
                   }
                   wasCharging = false;
               }
               chargingCompletePlayed = false;
-              wasFullyCharged = false;
-          } else {
-              chargingStatus = "FAULT";
-              isCharging = false;
-              playSystemSound("/web/pcm/error (5).wav");
-              wasCharging = false;
-              chargingCompletePlayed = false;
-              endChargingPlayed = false;
               wasFullyCharged = false;
           }
 
@@ -10801,7 +10798,7 @@ unsigned long wifiConnectStartTime = 0;
         mqtt.publish((prefix + "battery").c_str(), String(currentSample.batteryPercent).c_str(), true);
         mqtt.publish((prefix + "battery_voltage").c_str(), String(currentSample.voltage, 2).c_str(), true);
         mqtt.publish((prefix + "charger_voltage").c_str(), String(currentSample.charger, 2).c_str(), true);
-        mqtt.publish((prefix + "charging").c_str(), currentSample.charger > 4 ? "YES" : "NO", true);
+        mqtt.publish((prefix + "charging").c_str(), isCharging ? "YES" : "NO", true);
         mqtt.publish((prefix + "wifi").c_str(), String(currentSample.wifi).c_str(), true);
         mqtt.publish((prefix + "chip_temp").c_str(), String(currentSample.temp, 1).c_str(), true);
         mqtt.publish((prefix + "fps").c_str(), String(currentSample.fps).c_str(), true);
@@ -10839,6 +10836,14 @@ unsigned long wifiConnectStartTime = 0;
       DBG_PRINTLN("[GPIO] Failed to open preferences; using defaults");
     }
     applyGpioConfig(true);
+    analogReadResolution(12);
+#if defined(ADC_11db)
+    analogSetPinAttenuation(BLevel, ADC_11db);
+    analogSetPinAttenuation(CSense, ADC_11db);
+#elif defined(ADC_ATTEN_DB_12)
+    analogSetPinAttenuation(BLevel, ADC_ATTEN_DB_12);
+    analogSetPinAttenuation(CSense, ADC_ATTEN_DB_12);
+#endif
     initHostnames();
 
     // Tweak #6: route larger malloc() allocations to PSRAM when available.
