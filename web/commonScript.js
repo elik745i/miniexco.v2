@@ -265,7 +265,7 @@ const keysDown = {};
 const joystick = document.getElementById("joystickContainer");
 const knob = document.getElementById("joystickKnob");
 let active = false;
-const ARM_JOG_PWM = 200;
+const ARM_JOG_PWM = 255;
 
 joystick.addEventListener("pointerdown", startDrag);
 joystick.addEventListener("pointermove", drag);
@@ -2117,7 +2117,6 @@ function normalizeControlKeyFromEvent(e) {
       btn.addEventListener("pointerdown", onPointerDown);
       btn.addEventListener("pointerup", onPointerRelease);
       btn.addEventListener("pointercancel", onPointerRelease);
-      btn.addEventListener("pointerleave", onPointerRelease);
       btn.addEventListener("lostpointercapture", onPointerRelease);
 
       btn.addEventListener("keydown", (evt) => {
@@ -3054,10 +3053,33 @@ function toggleCamera() {
     return;
   }
 
-  const loaderUrl = '/web/GLTFLoader.js?v=' + assetTs;
+  const importWithRetry = (factory, label, maxAttempts = 5, baseDelayMs = 500) => {
+    return new Promise((resolve, reject) => {
+      const run = (attempt) => {
+        Promise.resolve()
+          .then(() => factory(attempt))
+          .then(resolve)
+          .catch((err) => {
+            if (attempt >= maxAttempts) {
+              reject(err);
+              return;
+            }
+            const delay = Math.min(8000, baseDelayMs * Math.pow(2, attempt - 1));
+            console.warn(`[mini3d] ${label} load failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`, err);
+            setTimeout(() => run(attempt + 1), delay);
+          });
+      };
+      run(1);
+    });
+  };
 
-  const loadPromise = import('three').then((THREE) => {
-    return import(loaderUrl).then((mod) => {
+  const loadPromise = importWithRetry(() => import('three'), 'three', 4, 400).then((THREE) => {
+    return importWithRetry(
+      (attempt) => import(`/web/GLTFLoader.js?v=${assetTs}&retry=${attempt}_${Date.now()}`),
+      'GLTFLoader',
+      6,
+      700
+    ).then((mod) => {
       const { GLTFLoader } = mod;
 
       // Scene
@@ -3212,6 +3234,9 @@ function toggleCamera() {
 
       return gltfReady;
     });
+  }).catch((err) => {
+    console.error('[mini3d] initialization failed after retries', err);
+    return null;
   });
 
   registerCameraPrereq("mini3d", loadPromise);

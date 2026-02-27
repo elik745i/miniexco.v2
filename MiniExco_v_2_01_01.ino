@@ -4971,9 +4971,54 @@ unsigned long wifiConnectStartTime = 0;
     ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
   }
 
+  static bool isMotorPwmPin(int16_t pin) {
+    if (pin < 0) return false;
+    return pin == gpioConfig.rightMotorIn1 ||
+           pin == gpioConfig.rightMotorIn2 ||
+           pin == gpioConfig.leftMotorIn1  ||
+           pin == gpioConfig.leftMotorIn2  ||
+           pin == gpioConfig.armMotorIn1   ||
+           pin == gpioConfig.armMotorIn2;
+  }
+
+  static void detachBucketServoNow() {
+    if (!bucketAttached) return;
+    ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)CH_BUCKET_SERVO, 0);
+    if (gpioConfig.bucketServo >= 0) pinMode(gpioConfig.bucketServo, INPUT);
+    bucketAttached = false;
+    bucketDetachTime = 0;
+  }
+
+  static void detachAuxServoNow() {
+    if (!auxAttached) return;
+    ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)CH_AUX_SERVO, 0);
+    if (gpioConfig.auxServo >= 0) pinMode(gpioConfig.auxServo, INPUT);
+    auxAttached = false;
+    auxDetachTime = 0;
+  }
+
+  static void runServoAutoDetach(uint32_t nowMs) {
+    if (!holdBucket && bucketAttached && bucketDetachTime > 0 &&
+        (int32_t)(nowMs - bucketDetachTime) >= 0) {
+      detachBucketServoNow();
+    }
+    if (!holdAux && auxAttached && auxDetachTime > 0 &&
+        (int32_t)(nowMs - auxDetachTime) >= 0) {
+      detachAuxServoNow();
+    }
+  }
+
   void bucketTilt(int bucketServoValue) {
     if (gpioConfig.bucketServo < 0) {
       DBG_PRINTLN("Bucket servo GPIO disabled");
+      return;
+    }
+    if (isMotorPwmPin(gpioConfig.bucketServo)) {
+      DBG_PRINTF("Bucket servo GPIO %d conflicts with motor GPIO; ignoring bucket command\n", gpioConfig.bucketServo);
+      return;
+    }
+    if (gpioConfig.auxServo >= 0 && gpioConfig.bucketServo == gpioConfig.auxServo) {
+      DBG_PRINTF("Bucket servo GPIO %d conflicts with aux servo GPIO; ignoring bucket command\n", gpioConfig.bucketServo);
       return;
     }
     if (!bucketAttached) {
@@ -4981,7 +5026,8 @@ unsigned long wifiConnectStartTime = 0;
       ledc_timer_config_t timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_14_BIT,
-        .timer_num = LEDC_TIMER_2,  // 🔄 CHANGED from 0 → 2
+        // Keep both servos on TIMER_3 so motor timers (incl. arm CH4/CH5) are not disturbed.
+        .timer_num = LEDC_TIMER_3,
         .freq_hz = 50,
         .clk_cfg = LEDC_AUTO_CLK
       };
@@ -4993,7 +5039,7 @@ unsigned long wifiConnectStartTime = 0;
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = (ledc_channel_t)CH_BUCKET_SERVO,
         .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = LEDC_TIMER_2,
+        .timer_sel = LEDC_TIMER_3,
         .duty = 0,
         .hpoint = 0
       };
@@ -5014,11 +5060,19 @@ unsigned long wifiConnectStartTime = 0;
       DBG_PRINTLN("Aux servo GPIO disabled");
       return;
     }
+    if (isMotorPwmPin(gpioConfig.auxServo)) {
+      DBG_PRINTF("Aux servo GPIO %d conflicts with motor GPIO; ignoring aux command\n", gpioConfig.auxServo);
+      return;
+    }
+    if (gpioConfig.bucketServo >= 0 && gpioConfig.auxServo == gpioConfig.bucketServo) {
+      DBG_PRINTF("Aux servo GPIO %d conflicts with bucket servo GPIO; ignoring aux command\n", gpioConfig.auxServo);
+      return;
+    }
     if (!auxAttached) {
       ledc_timer_config_t timer = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_14_BIT,
-        .timer_num = LEDC_TIMER_3,  // 🔄 CHANGED from 1 → 3
+        .timer_num = LEDC_TIMER_3,
         .freq_hz = 50,
         .clk_cfg = LEDC_AUTO_CLK
       };
@@ -5030,7 +5084,7 @@ unsigned long wifiConnectStartTime = 0;
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = (ledc_channel_t)CH_AUX_SERVO,
         .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = LEDC_TIMER_3,  // use a separate timer from bucket
+        .timer_sel = LEDC_TIMER_3,  // shared 50Hz servo timer
         .duty = 0,
         .hpoint = 0
       };
@@ -5105,6 +5159,7 @@ unsigned long wifiConnectStartTime = 0;
         pinMode(previous.bucketServo, INPUT);
       }
       bucketAttached = false;
+      bucketDetachTime = 0;
     }
     if (previous.auxServo != gpioConfig.auxServo) {
       if (previous.auxServo >= 0) {
@@ -5112,6 +5167,7 @@ unsigned long wifiConnectStartTime = 0;
         pinMode(previous.auxServo, INPUT);
       }
       auxAttached = false;
+      auxDetachTime = 0;
     }
 
     lastAppliedGpioConfig = gpioConfig;
@@ -10948,6 +11004,7 @@ unsigned long wifiConnectStartTime = 0;
 
     // WS housekeeping
     wsCarInput.cleanupClients();
+    runServoAutoDetach(now);
 
     // Animations (your existing)
     handleAnimationTimers();

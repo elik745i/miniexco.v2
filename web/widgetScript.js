@@ -307,13 +307,61 @@ function getElementRenderSize(el) {
   };
 }
 
-function applyWidgetScale(type) {
+function animateWidgetZoom(el, targetScale, onDone) {
+  if (!el) return;
+  const computed = window.getComputedStyle ? window.getComputedStyle(el) : null;
+  const currentRaw = computed ? parseFloat(computed.zoom || "1") : 1;
+  const from = Number.isFinite(currentRaw) && currentRaw > 0 ? currentRaw : 1;
+  const to = clampWidgetScale(targetScale);
+  const host = getMemoryFrameHost();
+  const hostRect0 = host ? host.getBoundingClientRect() : null;
+  const rect0 = el.getBoundingClientRect();
+  const lockX = hostRect0 ? (rect0.left - hostRect0.left) : 0;
+  const lockY = hostRect0 ? (rect0.top - hostRect0.top) : 0;
+  if (Math.abs(from - to) < 0.002) {
+    el.style.zoom = to.toFixed(2);
+    if (typeof onDone === "function") onDone();
+    return;
+  }
+
+  if (el.__widgetZoomAnimRaf) {
+    cancelAnimationFrame(el.__widgetZoomAnimRaf);
+    el.__widgetZoomAnimRaf = null;
+  }
+
+  const durationMs = 180;
+  const start = performance.now();
+  const easeOutCubic = (t) => (1 - Math.pow(1 - t, 3));
+  const tick = (now) => {
+    const t = Math.max(0, Math.min(1, (now - start) / durationMs));
+    const eased = easeOutCubic(t);
+    const z = from + ((to - from) * eased);
+    el.style.zoom = z.toFixed(3);
+    if (host) applyWidgetRenderPos(el, host, lockX, lockY);
+    if (t < 1) {
+      el.__widgetZoomAnimRaf = requestAnimationFrame(tick);
+      return;
+    }
+    el.style.zoom = to.toFixed(2);
+    if (host) applyWidgetRenderPos(el, host, lockX, lockY);
+    el.__widgetZoomAnimRaf = null;
+    if (typeof onDone === "function") onDone();
+  };
+
+  el.__widgetZoomAnimRaf = requestAnimationFrame(tick);
+}
+
+function applyWidgetScale(type, animate, onDone) {
   if (type === "indicators") {
     const wrap = getMemoryFrameWrap();
     if (!wrap) return;
     const s = clampWidgetScale(memoryFrameState.scale || 1);
     memoryFrameState.scale = s;
-    wrap.style.zoom = s.toFixed(2);
+    if (animate) animateWidgetZoom(wrap, s, onDone);
+    else {
+      wrap.style.zoom = s.toFixed(2);
+      if (typeof onDone === "function") onDone();
+    }
     return;
   }
   const st = getOverlayWidgetState(type);
@@ -321,24 +369,29 @@ function applyWidgetScale(type) {
   if (!st || !el) return;
   const s = clampWidgetScale(st.scale || 1);
   st.scale = s;
-  el.style.zoom = s.toFixed(2);
+  if (animate) animateWidgetZoom(el, s, onDone);
+  else {
+    el.style.zoom = s.toFixed(2);
+    if (typeof onDone === "function") onDone();
+  }
 }
 
-function keepWidgetVisibleAfterScale(type) {
+function keepWidgetVisibleAfterScale(type, animated) {
+  const useAnim = !!animated;
   if (type === "indicators") {
     const safe = canPlaceAnchorWithoutOverlap("indicators", memoryFrameState.x, memoryFrameState.y);
     if (safe) {
       memoryFrameState.x = safe.x;
       memoryFrameState.y = safe.y;
-      applyUnifiedWidgetLayout("indicators", false, true, { preserveOthers: true });
-      nudgeWidgetInsideViewport("indicators");
+      applyUnifiedWidgetLayout("indicators", useAnim, true, { preserveOthers: true });
+      nudgeWidgetInsideViewport("indicators", useAnim);
       return;
     }
     const def = memoryFrameDefaultPos();
     memoryFrameState.x = def.x;
     memoryFrameState.y = def.y;
-    applyUnifiedWidgetLayout("indicators", false, true, { preserveOthers: true });
-    nudgeWidgetInsideViewport("indicators");
+    applyUnifiedWidgetLayout("indicators", useAnim, true, { preserveOthers: true });
+    nudgeWidgetInsideViewport("indicators", useAnim);
     return;
   }
 
@@ -348,18 +401,19 @@ function keepWidgetVisibleAfterScale(type) {
   if (safe) {
     st.x = safe.x;
     st.y = safe.y;
-    applyUnifiedWidgetLayout(type, false, true, { preserveOthers: true });
-    nudgeWidgetInsideViewport(type);
+    applyUnifiedWidgetLayout(type, useAnim, true, { preserveOthers: true });
+    nudgeWidgetInsideViewport(type, useAnim);
     return;
   }
   const def = defaultOverlayWidgetPos(type);
   st.x = def.x;
   st.y = def.y;
-  applyUnifiedWidgetLayout(type, false, true, { preserveOthers: true });
-  nudgeWidgetInsideViewport(type);
+  applyUnifiedWidgetLayout(type, useAnim, true, { preserveOthers: true });
+  nudgeWidgetInsideViewport(type, useAnim);
 }
 
-function nudgeWidgetInsideViewport(type) {
+function nudgeWidgetInsideViewport(type, animated) {
+  const useAnim = !!animated;
   const margin = 8;
   if (type === "indicators") {
     const wrap = getMemoryFrameWrap();
@@ -374,7 +428,7 @@ function nudgeWidgetInsideViewport(type) {
     if (dx !== 0 || dy !== 0) {
       memoryFrameState.x = Math.round((Number(memoryFrameState.x) || 0) + dx);
       memoryFrameState.y = Math.round((Number(memoryFrameState.y) || 0) + dy);
-      applyMemoryFramePosition(false);
+      applyMemoryFramePosition(useAnim);
       persistMemoryFrameState(true);
     }
     return;
@@ -393,7 +447,7 @@ function nudgeWidgetInsideViewport(type) {
   if (dx !== 0 || dy !== 0) {
     st.x = Math.round((Number(st.x) || 0) + dx);
     st.y = Math.round((Number(st.y) || 0) + dy);
-    applyOverlayWidgetPosition(type, false);
+    applyOverlayWidgetPosition(type, useAnim);
     persistOverlayWidgetState(type, true);
   }
 }
@@ -1935,9 +1989,10 @@ function openWidgetContextMenu(type, clientX, clientY) {
           const pct = Number(raw);
           if (Number.isFinite(pct)) {
             memoryFrameState.scale = clampWidgetScale(pct / 100);
-            applyWidgetScale("indicators");
-            keepWidgetVisibleAfterScale("indicators");
-            persistMemoryFrameState(true);
+            applyWidgetScale("indicators", true, () => {
+              keepWidgetVisibleAfterScale("indicators", true);
+              persistMemoryFrameState(true);
+            });
           }
         }
         refreshViewWidgetMiniaturesSoon();
@@ -1974,9 +2029,10 @@ function openWidgetContextMenu(type, clientX, clientY) {
           const pct = Number(raw);
           if (Number.isFinite(pct)) {
             st.scale = clampWidgetScale(pct / 100);
-            applyWidgetScale(type);
-            keepWidgetVisibleAfterScale(type);
-            persistOverlayWidgetState(type, true);
+            applyWidgetScale(type, true, () => {
+              keepWidgetVisibleAfterScale(type, true);
+              persistOverlayWidgetState(type, true);
+            });
           }
         }
         refreshViewWidgetMiniaturesSoon();
