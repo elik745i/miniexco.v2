@@ -8,6 +8,8 @@ Firmware for the MiniExco rover running on ESP32-S3-SPK v1.0 (8 MB PSRAM / 16 MB
 ![MiniExco rover view 3](docs/images/mini-exco-0019.jpg)
 ![MiniExco interface](docs/images/v2-interface.jpg)
 ![MiniExco right dock](docs/images/right-dock.png)
+![MiniExco controls](docs/images/controls.jpg)
+![MiniExco file manager](docs/images/file-manager.jpg)
 
 Project Lineage
 ---------------
