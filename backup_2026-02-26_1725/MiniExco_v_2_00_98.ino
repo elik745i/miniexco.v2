@@ -540,7 +540,6 @@ struct MQTTConfig;
   uint32_t telemetryFileMaxKB = TELEMETRY_FILE_MAX_KB_DEFAULT;
   size_t telemetryFileMaxSizeBytes = (size_t)TELEMETRY_FILE_MAX_KB_DEFAULT * 1024;
   String currentTelemetryFile = "/telemetry/telemetry_01.csv";
-  static constexpr size_t TELEMETRY_BUFFER_MAX_SAMPLES = 180;
 
   const char* TELEMETRY_CSV_HEADER =
     "datetime,timestamp,voltage,temp,charger,imu_euler_x,imu_euler_y,imu_euler_z,"
@@ -2266,10 +2265,6 @@ unsigned long wifiConnectStartTime = 0;
 
     // --- Buffer currentSample for writing ---
     telemetryBuffer.push_back(currentSample);
-    if (telemetryBuffer.size() > TELEMETRY_BUFFER_MAX_SAMPLES) {
-      const size_t overflow = telemetryBuffer.size() - TELEMETRY_BUFFER_MAX_SAMPLES;
-      telemetryBuffer.erase(telemetryBuffer.begin(), telemetryBuffer.begin() + overflow);
-    }
 
     // === SD card is accessed from here on ===
     {
@@ -2280,97 +2275,64 @@ unsigned long wifiConnectStartTime = 0;
         SD.mkdir("/telemetry");
       }
 
+      // ---- Find the current file number ----
       int idx = 1;
-      // Resolve target file only when current target is missing/unset.
-      if (currentTelemetryFile.isEmpty() || !SD.exists(currentTelemetryFile)) {
-        // ---- Find the current file number ----
-        while (true) {
-          String fname = "/telemetry/telemetry_";
-          fname += (idx < 10 ? "0" : "");
-          fname += String(idx);
-          fname += ".csv";
+      while (true) {
+        String fname = "/telemetry/telemetry_";
+        fname += (idx < 10 ? "0" : "");
+        fname += String(idx);
+        fname += ".csv";
 
-          if (!SD.exists(fname)) {
-            // Create new file with header
-            File f = SD.open(fname, FILE_WRITE);
-            if (f) {
-              f.println(TELEMETRY_CSV_HEADER);
-              f.close();
-            }
-            currentTelemetryFile = fname;
-            break;
-          } else {
-            File f = SD.open(fname, FILE_READ);
-            if (f && f.size() < telemetryFileMaxSizeBytes) {
-              currentTelemetryFile = fname;
-              f.close();
-              break;
-            }
-            if (f) f.close();
-            idx++;
+        if (!SD.exists(fname)) {
+          // Create new file with header
+          File f = SD.open(fname, FILE_WRITE);
+          if (f) {
+            f.println(TELEMETRY_CSV_HEADER);
+            f.close();
           }
+          currentTelemetryFile = fname;
+          break;
+        } else {
+          File f = SD.open(fname, FILE_READ);
+          if (f && f.size() < telemetryFileMaxSizeBytes) {
+            currentTelemetryFile = fname;
+            f.close();
+            break;
+          }
+          if (f) f.close();
+          idx++;
         }
-      } else {
-        // Keep current file index for rotate logic below.
-        int us = currentTelemetryFile.lastIndexOf('_');
-        int dot = currentTelemetryFile.lastIndexOf('.');
-        if (us >= 0 && dot > us + 1) idx = currentTelemetryFile.substring(us + 1, dot).toInt();
       }
 
       // ---- If appending would exceed size, rotate to next file ----
       File f = SD.open(currentTelemetryFile, FILE_APPEND);
       if (!f) {
-        // Fallback for FS variants that can fail FILE_APPEND.
-        f = SD.open(currentTelemetryFile, FILE_WRITE);
-        if (f) f.seek(f.size());
-      }
-      if (!f) {
-        DBG_PRINTF("Failed to open %s for append!\n", currentTelemetryFile.c_str());
+        DBG_PRINTF("Failed to open %s for appending!\n", currentTelemetryFile.c_str());
+        // If the SD was pulled, stop hammering the card. We’ll resume when user re-enables.
+        if (!sdPresent()) {
+          setTelemetryEnabled(false);    // auto-disable to avoid repeated errors
+        }      
         return;
       }
-      // Force write cursor to EOF to avoid accidental overwrite.
-      f.seek(f.size());
-
-      const size_t estimatedCsvBytesPerSample = 128;
-      size_t estimatedSize = telemetryBuffer.size() * estimatedCsvBytesPerSample;
+      size_t estimatedSize = telemetryBuffer.size() * sizeof(TelemetrySample);
       if (f.size() + estimatedSize > telemetryFileMaxSizeBytes) {
         f.close();
-        while (true) {
-          idx++;
-          String nextFile = "/telemetry/telemetry_";
-          nextFile += (idx < 10 ? "0" : "");
-          nextFile += String(idx);
-          nextFile += ".csv";
-
-          if (!SD.exists(nextFile)) {
-            File nf = SD.open(nextFile, FILE_WRITE);
-            if (nf) {
-              nf.println(TELEMETRY_CSV_HEADER);
-              nf.close();
-            }
-            currentTelemetryFile = nextFile;
-            break;
-          }
-
-          File rf = SD.open(nextFile, FILE_READ);
-          const bool hasRoom = (rf && rf.size() < telemetryFileMaxSizeBytes);
-          if (rf) rf.close();
-          if (hasRoom) {
-            currentTelemetryFile = nextFile;
-            break;
-          }
+        idx++;
+        String nextFile = "/telemetry/telemetry_";
+        nextFile += (idx < 10 ? "0" : "");
+        nextFile += String(idx);
+        nextFile += ".csv";
+        File nf = SD.open(nextFile, FILE_WRITE);
+        if (nf) {
+          nf.println(TELEMETRY_CSV_HEADER);
+          nf.close();
         }
-
+        currentTelemetryFile = nextFile;
         f = SD.open(currentTelemetryFile, FILE_APPEND);
         if (!f) {
-          f = SD.open(currentTelemetryFile, FILE_WRITE);
-          if (f) f.seek(f.size());
-        }
-        if (!f) {
-          DBG_PRINTF("Failed to open %s for append after rotate!\n", currentTelemetryFile.c_str());
+          DBG_PRINTF("Failed to open %s for appending!\n", currentTelemetryFile.c_str());
           return;
         }
-        f.seek(f.size());
       }
 
       // ---- Write all samples in the buffer ----
@@ -5367,14 +5329,7 @@ unsigned long wifiConnectStartTime = 0;
           else if (key == "HoldBucket")      { holdBucket = (valueInt != 0); uiPrefs.putBool("HoldBucket", holdBucket); }
           else if (key == "HoldAux")         { holdAux = (valueInt != 0); uiPrefs.putBool("HoldAux", holdAux); }
           else if (key == "DarkMode")        { darkMode = (valueInt != 0); uiPrefs.putBool("darkMode", darkMode); }
-          else if (key == "RecordTelemetry") {
-            const bool on = (valueInt != 0) ||
-                            value1 == "true" || value1 == "TRUE" ||
-                            value1 == "on" || value1 == "ON" ||
-                            value1 == "yes" || value1 == "YES";
-            setTelemetryEnabled(on);
-            wsSendKeyInt("RecordTelemetry", on ? 1 : 0);
-          }
+          else if (key == "RecordTelemetry") { setTelemetryEnabled(valueInt != 0); }
           else if (key == "SystemSounds")    { int v = atoi(value1.c_str()); sSndEnabled = (v != 0); uiPrefs.putBool("SystemSounds", sSndEnabled); }
           else if (key == "WsRebootOnDisconnect") { saveWsRebootWatchdogPref(valueInt != 0); }
           else if (key == "IndicatorsVisible") { indicatorsVisible = (valueInt != 0); uiPrefs.putBool(PREF_INDICATORS_VISIBLE, indicatorsVisible); wsSendKeyInt("IndicatorsVisible", indicatorsVisible ? 1 : 0); }
