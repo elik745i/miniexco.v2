@@ -677,6 +677,20 @@
 					<label for="wsRebootOnDisconnectToggle" style="font-size:20px;">WS Disconnect Reboot Watchdog:</label>
 					<input type="checkbox" id="wsRebootOnDisconnectToggle"><br><br>
 
+					<label for="serialLogRateMs" style="font-size:20px;">Serial Terminal Stream Rate:</label>
+					<select id="serialLogRateMs" style="font-size:16px; padding:4px 8px; min-width:220px;">
+						<option value="0">Disabled (history only)</option>
+						<option value="20">Very High (20 ms)</option>
+						<option value="40" selected>High (40 ms)</option>
+						<option value="80">Balanced (80 ms)</option>
+						<option value="120">Low (120 ms)</option>
+						<option value="200">Very Low (200 ms)</option>
+						<option value="500">Minimal (500 ms)</option>
+					</select><br><br>
+
+					<label for="serialLogKeepLines" style="font-size:20px;">Serial Terminal Retained Lines:</label>
+					<input type="number" id="serialLogKeepLines" min="50" max="600" step="10" value="200" style="width:110px; font-size:16px; padding:4px 8px;"><br><br>
+
 					<div id="clearPairPrefsRow" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 6px 0 18px 0;">
 						<button id="clearPairPrefsBtn" type="button" class="ctrlBtn" onclick="clearPairedPrefs()">Clear Paired Prefs</button>
 						<span id="clearPairPrefsStatus" style="color:#aac; font-size:0.95em;">Removes saved dock pairing and re-enables discovery.</span>

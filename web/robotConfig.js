@@ -282,12 +282,30 @@ window.cachedModelOrientationDir = window.cachedModelOrientationDir || { x: 1, y
 window.cachedModelAxisMap = window.cachedModelAxisMap || { x: "x", y: "y", z: "z" };
 window.cachedGpioConfig = window.cachedGpioConfig || {};
 window.cachedTelemetryMaxKB = window.cachedTelemetryMaxKB || 2048;
+window.cachedSerialLogRateMs = window.cachedSerialLogRateMs || 40;
+window.cachedSerialLogKeepLines = window.cachedSerialLogKeepLines || 200;
 
 function sanitizeTelemetryMaxKB(raw) {
 	let n = parseInt(raw, 10);
 	if (Number.isNaN(n)) n = 2048;
 	if (n < 128) n = 128;
 	if (n > 10240) n = 10240;
+	return n;
+}
+
+function sanitizeSerialLogRateMs(raw) {
+	let n = parseInt(raw, 10);
+	if (Number.isNaN(n)) n = 40;
+	const allowed = [0, 20, 40, 80, 120, 200, 500];
+	if (!allowed.includes(n)) n = 40;
+	return n;
+}
+
+function sanitizeSerialLogKeepLines(raw) {
+	let n = parseInt(raw, 10);
+	if (Number.isNaN(n)) n = 200;
+	if (n < 50) n = 50;
+	if (n > 600) n = 600;
 	return n;
 }
 
@@ -324,6 +342,16 @@ function refreshRobotConfigFromBackend() {
 				window.cachedWsRebootOnDisconnect = (data.WsRebootOnDisconnect == 1);
 				const wsRebootToggle = document.getElementById("wsRebootOnDisconnectToggle");
 				if (wsRebootToggle) wsRebootToggle.checked = window.cachedWsRebootOnDisconnect;
+			}
+			if (typeof data.SerialLogRateMs !== 'undefined') {
+				window.cachedSerialLogRateMs = sanitizeSerialLogRateMs(data.SerialLogRateMs);
+				const serialLogRateSelect = document.getElementById("serialLogRateMs");
+				if (serialLogRateSelect) serialLogRateSelect.value = String(window.cachedSerialLogRateMs);
+			}
+			if (typeof data.SerialLogKeepLines !== 'undefined') {
+				window.cachedSerialLogKeepLines = sanitizeSerialLogKeepLines(data.SerialLogKeepLines);
+				const serialLogKeepInput = document.getElementById("serialLogKeepLines");
+				if (serialLogKeepInput) serialLogKeepInput.value = String(window.cachedSerialLogKeepLines);
 			}
 			if (typeof data.ModelRotX !== 'undefined') {
 				setModelOrientationValue('x', data.ModelRotX);
@@ -392,6 +420,20 @@ function saveRobotConfig() {
 	const recordTelemetrySwitch = document.getElementById("recordTelemetryToggle");
 	if (recordTelemetrySwitch) {
 		sendButtonInput("RecordTelemetry", recordTelemetrySwitch.checked ? 1 : 0);
+	}
+	const serialLogRateSelect = document.getElementById("serialLogRateMs");
+	if (serialLogRateSelect) {
+		const nextRate = sanitizeSerialLogRateMs(serialLogRateSelect.value);
+		window.cachedSerialLogRateMs = nextRate;
+		serialLogRateSelect.value = String(nextRate);
+		sendButtonInput("SerialLogRateMs", nextRate);
+	}
+	const serialLogKeepInput = document.getElementById("serialLogKeepLines");
+	if (serialLogKeepInput) {
+		const nextLines = sanitizeSerialLogKeepLines(serialLogKeepInput.value);
+		window.cachedSerialLogKeepLines = nextLines;
+		serialLogKeepInput.value = String(nextLines);
+		sendButtonInput("SerialLogKeepLines", nextLines);
 	}
 
 	const snapshot = gatherGpioConfig();
@@ -526,6 +568,18 @@ window.initRobotConfigTab = function() {
 			sendButtonInput("SystemVolume", val);
 		};
 	}
+	const serialLogKeepInput = document.getElementById("serialLogKeepLines");
+	if (serialLogKeepInput) {
+		serialLogKeepInput.value = String(sanitizeSerialLogKeepLines(window.cachedSerialLogKeepLines));
+		const applyKeepLines = () => {
+			const nextLines = sanitizeSerialLogKeepLines(serialLogKeepInput.value);
+			serialLogKeepInput.value = String(nextLines);
+			window.cachedSerialLogKeepLines = nextLines;
+			sendButtonInput("SerialLogKeepLines", nextLines);
+		};
+		serialLogKeepInput.onchange = applyKeepLines;
+		serialLogKeepInput.onblur = applyKeepLines;
+	}
 
 	// WebSocket disconnect reboot watchdog
 	const wsRebootOnDisconnectToggle = document.getElementById("wsRebootOnDisconnectToggle");
@@ -538,6 +592,17 @@ window.initRobotConfigTab = function() {
 			window.cachedWsRebootOnDisconnect = nextState;
 			sendButtonInput("WsRebootOnDisconnect", nextState ? 1 : 0);
 			fetch('/set_ws_reboot_watchdog?value=' + (nextState ? 1 : 0), { cache: 'no-store' }).catch(() => {});
+		};
+	}
+
+	const serialLogRateSelect = document.getElementById("serialLogRateMs");
+	if (serialLogRateSelect) {
+		serialLogRateSelect.value = String(sanitizeSerialLogRateMs(window.cachedSerialLogRateMs));
+		serialLogRateSelect.onchange = function () {
+			const nextRate = sanitizeSerialLogRateMs(this.value);
+			this.value = String(nextRate);
+			window.cachedSerialLogRateMs = nextRate;
+			sendButtonInput("SerialLogRateMs", nextRate);
 		};
 	}
 
@@ -677,6 +742,16 @@ function handleModalWebSocketMessage(key, value) {
 		window.cachedWsRebootOnDisconnect = (value == "1");
 		const el = document.getElementById('wsRebootOnDisconnectToggle');
 		if (el) el.checked = window.cachedWsRebootOnDisconnect;
+	}
+	if (key === "SerialLogRateMs") {
+		window.cachedSerialLogRateMs = sanitizeSerialLogRateMs(value);
+		const el = document.getElementById('serialLogRateMs');
+		if (el) el.value = String(window.cachedSerialLogRateMs);
+	}
+	if (key === "SerialLogKeepLines") {
+		window.cachedSerialLogKeepLines = sanitizeSerialLogKeepLines(value);
+		const el = document.getElementById('serialLogKeepLines');
+		if (el) el.value = String(window.cachedSerialLogKeepLines);
 	}
 	if (key === "ModelRotX" || key === "ModelRotY" || key === "ModelRotZ") {
 		const axis = key === "ModelRotX" ? "x" : (key === "ModelRotY" ? "y" : "z");

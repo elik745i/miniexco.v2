@@ -2,6 +2,8 @@ window.cachedSystemSounds = (typeof window.cachedSystemSounds === "boolean") ? w
 window.cachedGamepadEnabled = (typeof window.cachedGamepadEnabled === "boolean") ? window.cachedGamepadEnabled : undefined;
 window.cachedSystemVolume = (typeof window.cachedSystemVolume !== "undefined") ? window.cachedSystemVolume : undefined;
 window.cachedWsRebootOnDisconnect = (typeof window.cachedWsRebootOnDisconnect === "boolean") ? window.cachedWsRebootOnDisconnect : undefined;
+window.cachedSerialLogRateMs = (typeof window.cachedSerialLogRateMs !== "undefined") ? window.cachedSerialLogRateMs : 40;
+window.cachedSerialLogKeepLines = (typeof window.cachedSerialLogKeepLines !== "undefined") ? window.cachedSerialLogKeepLines : 200;
 
 var websocketCarInput;
 var auxSlider;
@@ -768,6 +770,18 @@ function realOnLoad() {
         window.cachedWsRebootOnDisconnect = (data.WsRebootOnDisconnect == 1);
         const wsRebootToggle = document.getElementById("wsRebootOnDisconnectToggle");
         if (wsRebootToggle) wsRebootToggle.checked = window.cachedWsRebootOnDisconnect;
+      }
+      if ("SerialLogRateMs" in data) {
+        const n = parseInt(data.SerialLogRateMs, 10);
+        window.cachedSerialLogRateMs = Number.isNaN(n) ? 40 : n;
+        const serialRate = document.getElementById("serialLogRateMs");
+        if (serialRate) serialRate.value = String(window.cachedSerialLogRateMs);
+      }
+      if ("SerialLogKeepLines" in data) {
+        const n = parseInt(data.SerialLogKeepLines, 10);
+        window.cachedSerialLogKeepLines = Number.isNaN(n) ? 200 : n;
+        const serialKeep = document.getElementById("serialLogKeepLines");
+        if (serialKeep) serialKeep.value = String(window.cachedSerialLogKeepLines);
       }
       if ("IndicatorsVisible" in data) {
         memoryFrameState.visible = (data.IndicatorsVisible == 1);
@@ -1566,6 +1580,20 @@ function initWebSocket() {
         if (toggle) toggle.checked = window.cachedWsRebootOnDisconnect;
         return;
       }
+      if (key === "SerialLogRateMs") {
+        const n = parseInt(value, 10);
+        window.cachedSerialLogRateMs = Number.isNaN(n) ? 40 : n;
+        const select = document.getElementById("serialLogRateMs");
+        if (select) select.value = String(window.cachedSerialLogRateMs);
+        return;
+      }
+      if (key === "SerialLogKeepLines") {
+        const n = parseInt(value, 10);
+        window.cachedSerialLogKeepLines = Number.isNaN(n) ? 200 : n;
+        const input = document.getElementById("serialLogKeepLines");
+        if (input) input.value = String(window.cachedSerialLogKeepLines);
+        return;
+      }
 
       if (key === "IndicatorsVisible") {
         memoryFrameState.visible = (value == "1");
@@ -1925,7 +1953,7 @@ function sendButtonInput(key, value) {
 
 function handleKeyDown(e) {
   if (isModalOpen() || isInputFocused()) return;  // dY^ Block controls if modal or input
-  const key = e.key.toLowerCase();
+  const key = normalizeControlKeyFromEvent(e);
   if (keysDown[key]) return; // prevent re-processing held key
   keysDown[key] = true;
 
@@ -1980,7 +2008,7 @@ function handleKeyDown(e) {
 
 function handleKeyUp(e) {
   if (isModalOpen() || isInputFocused()) return;  // dY^ Block controls if modal or input
-  const key = e.key.toLowerCase();
+  const key = normalizeControlKeyFromEvent(e);
   delete keysDown[key];
 
   const action = keymap[key];
@@ -1992,6 +2020,23 @@ function handleKeyUp(e) {
   if (action === "horn") {
     sendButtonInput("Horn", "0");  // or your horn-off command
   }
+}
+
+function normalizeControlKeyFromEvent(e) {
+  const key = String(e?.key || "").toLowerCase();
+  if (keymap[key]) return key;
+
+  const code = String(e?.code || "");
+  if (/^Key[A-Z]$/.test(code)) return code.substring(3).toLowerCase(); // KeyW -> w
+  if (/^Digit[0-9]$/.test(code)) return code.substring(5);             // Digit1 -> 1
+
+  if (code === "Space") return " ";
+  if (code === "ArrowUp") return "arrowup";
+  if (code === "ArrowDown") return "arrowdown";
+  if (code === "ArrowLeft") return "arrowleft";
+  if (code === "ArrowRight") return "arrowright";
+
+  return key;
 }
 
   function updateSliderValue(id) {

@@ -34,7 +34,7 @@
 struct MQTTConfig;
 
   #define DEBUG_SERIAL   0
-  #define DEBUG_TERMINAL 0
+  #define DEBUG_TERMINAL 1
   #define USE_PSRAM      1
 
 //-----------------------------------------------------------------------LIBs----------------------------------------------------------------------
@@ -155,7 +155,7 @@ struct MQTTConfig;
 
   void otaUpdate();
   static bool otaDownloadAndApplyFromUrl(const String& url, String& errorOut);
-  static void serialMirrorPrint(const String& text, bool appendNewline);
+  static void serialMirrorPrint(const char* text, bool appendNewline);
   static void serialMirrorPrintf(const char* fmt, ...);
   static void executeSerialCommand(String input);
   void webServerReboot();
@@ -539,6 +539,14 @@ struct MQTTConfig;
   const uint32_t TELEMETRY_FILE_MAX_KB_MAX = 10240;
   uint32_t telemetryFileMaxKB = TELEMETRY_FILE_MAX_KB_DEFAULT;
   size_t telemetryFileMaxSizeBytes = (size_t)TELEMETRY_FILE_MAX_KB_DEFAULT * 1024;
+  const uint32_t SERIAL_LOG_RATE_MS_DEFAULT = 40;
+  const uint32_t SERIAL_LOG_RATE_MS_MIN = 0;    // 0 = disable live SERLOG websocket push
+  const uint32_t SERIAL_LOG_RATE_MS_MAX = 500;  // cap so the UI still gets updates
+  uint32_t serialLogWsMinIntervalMs = SERIAL_LOG_RATE_MS_DEFAULT;
+  const uint32_t SERIAL_LOG_KEEP_LINES_DEFAULT = 200;
+  const uint32_t SERIAL_LOG_KEEP_LINES_MIN = 50;
+  const uint32_t SERIAL_LOG_KEEP_LINES_MAX = 600;
+  uint32_t serialLogRetainLines = SERIAL_LOG_KEEP_LINES_DEFAULT;
   String currentTelemetryFile = "/telemetry/telemetry_01.csv";
   static constexpr size_t TELEMETRY_BUFFER_MAX_SAMPLES = 180;
 
@@ -737,14 +745,50 @@ struct MQTTConfig;
 //----------------------------------------------------------------------Serial Debug---------------------------------------------------------------
   /* As pins 19, 43 and 44 is used to control DRV8833 when debut is enabled, you will see serial but will be unable to control motors */
 
-  #ifdef DEBUG_SERIAL
-    #define DBG_PRINT(...)    do { if (DEBUG_SERIAL) Serial.print(__VA_ARGS__); } while(0)
-    #define DBG_PRINTLN(...)  do { if (DEBUG_SERIAL) Serial.println(__VA_ARGS__); } while(0)
-    #define DBG_PRINTF(...)   do { if (DEBUG_SERIAL) Serial.printf(__VA_ARGS__); } while(0)
+  struct TerminalMirrorSink : public Print {
+    static constexpr size_t CAP = 319;
+    char out[CAP + 1];
+    size_t len = 0;
+    TerminalMirrorSink() { out[0] = '\0'; }
+    size_t write(uint8_t c) override {
+      if (len < CAP) {
+        out[len++] = static_cast<char>(c);
+        out[len] = '\0';
+      }
+      return 1;
+    }
+  };
 
-    #define PRINT_HEAP(step) \
-      DBG_PRINTF("[HEAP][%s] Free: %u  MinFree: %u  MaxAlloc: %u\n", step, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
-  #endif
+  template <typename... Args>
+  static inline void dbgPrintImpl(Args... args) {
+    if (DEBUG_SERIAL) {
+      Serial.print(args...);
+    }
+    if (DEBUG_TERMINAL) {
+      TerminalMirrorSink sink;
+      sink.print(args...);
+      serialMirrorPrint(sink.out, false);
+    }
+  }
+
+  template <typename... Args>
+  static inline void dbgPrintlnImpl(Args... args) {
+    if (DEBUG_SERIAL) {
+      Serial.println(args...);
+    }
+    if (DEBUG_TERMINAL) {
+      TerminalMirrorSink sink;
+      sink.println(args...);
+      serialMirrorPrint(sink.out, true);
+    }
+  }
+
+  #define DBG_PRINT(...)    do { dbgPrintImpl(__VA_ARGS__); } while(0)
+  #define DBG_PRINTLN(...)  do { dbgPrintlnImpl(__VA_ARGS__); } while(0)
+  #define DBG_PRINTF(...)   do { if (DEBUG_SERIAL) Serial.printf(__VA_ARGS__); if (DEBUG_TERMINAL) serialMirrorPrintf(__VA_ARGS__); } while(0)
+
+  #define PRINT_HEAP(step) \
+    DBG_PRINTF("[HEAP][%s] Free: %u  MinFree: %u  MaxAlloc: %u\n", step, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
 
   static bool bluepadNeedsRadioCoexistence() {
     // Bluepad32 relies on the ESP-IDF Wi-Fi/Bluetooth coexistence helpers which
@@ -1192,6 +1236,8 @@ unsigned long wifiConnectStartTime = 0;
   bool sSndEnabled = false;
   bool wsRebootOnDisconnect = true;
   static const char* PREF_WS_REBOOT_WATCHDOG = "WsRebootWD"; // <=15 chars for ESP32 Preferences
+  static const char* PREF_SERIALLOG_RATE_MS = "SerLogInt";   // <=15 chars for ESP32 Preferences
+  static const char* PREF_SERIALLOG_KEEP_LINES = "SerLogKeep"; // <=15 chars for ESP32 Preferences
   static const char* PREF_INDICATORS_VISIBLE = "MetersVis";
   static const char* PREF_INDICATORS_X = "MetersX";
   static const char* PREF_INDICATORS_Y = "MetersY";
@@ -1327,25 +1373,84 @@ unsigned long wifiConnectStartTime = 0;
     return encoded;
   }
 
-  static constexpr size_t SERIAL_LOG_RING_SIZE = 200;
-  static String serialLogRing[SERIAL_LOG_RING_SIZE];
+  static constexpr size_t SERIAL_LOG_RING_SIZE = SERIAL_LOG_KEEP_LINES_MAX;
+  static constexpr size_t SERIAL_LOG_LINE_MAX  = 280;
+  static char* serialLogRing = nullptr;                          // contiguous [N][LINE_MAX+1]
   static size_t serialLogHead = 0;
   static size_t serialLogCount = 0;
+  static uint32_t serialLastWsPushMs = 0;
 
-  static void serialLogPushLine(const String& line, bool sendWs = true) {
-    String safe = line;
-    safe.replace("\r", "");
-    if (safe.length() > 280) safe = safe.substring(0, 280);
-    serialLogRing[serialLogHead] = safe;
-    serialLogHead = (serialLogHead + 1) % SERIAL_LOG_RING_SIZE;
-    if (serialLogCount < SERIAL_LOG_RING_SIZE) serialLogCount++;
-    (void)sendWs;
+  static bool initSerialLogStorage() {
+    if (serialLogRing) return true;
+    const size_t bytes = SERIAL_LOG_RING_SIZE * (SERIAL_LOG_LINE_MAX + 1);
+    serialLogRing = (char*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!serialLogRing) {
+      serialLogRing = (char*)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    }
+    if (!serialLogRing) return false;
+    memset(serialLogRing, 0, bytes);
+    return true;
   }
 
-  static void serialMirrorPrint(const String& text, bool appendNewline) {
-    if (text.length() == 0 && !appendNewline) return;
-    if (appendNewline) serialLogPushLine(text, true);
-    else serialLogPushLine(text, true);
+  static inline size_t serialLogActiveCapacity() {
+    size_t cap = (size_t)serialLogRetainLines;
+    if (cap < SERIAL_LOG_KEEP_LINES_MIN) cap = SERIAL_LOG_KEEP_LINES_MIN;
+    if (cap > SERIAL_LOG_RING_SIZE) cap = SERIAL_LOG_RING_SIZE;
+    return cap;
+  }
+
+  static void clearSerialLogBuffer() {
+    serialLogHead = 0;
+    serialLogCount = 0;
+    if (serialLogRing) {
+      const size_t bytes = SERIAL_LOG_RING_SIZE * (SERIAL_LOG_LINE_MAX + 1);
+      memset(serialLogRing, 0, bytes);
+    }
+  }
+
+  static inline char* serialLogSlot(size_t idx) {
+    return serialLogRing + (idx * (SERIAL_LOG_LINE_MAX + 1));
+  }
+
+  static void serialLogPushLine(const char* line, bool sendWs = true) {
+    if (!line) return;
+    if (!initSerialLogStorage()) return;
+    const size_t cap = serialLogActiveCapacity();
+    char* slot = serialLogSlot(serialLogHead);
+    size_t out = 0;
+    for (const char* p = line; *p && out < SERIAL_LOG_LINE_MAX; ++p) {
+      if (*p == '\r') continue;
+      slot[out++] = *p;
+    }
+    slot[out] = '\0';
+    serialLogHead = (serialLogHead + 1) % cap;
+    if (serialLogCount < cap) serialLogCount++;
+    if (sendWs && wsAttached && wsCarInput.count() > 0 && serialLogWsMinIntervalMs > 0) {
+      const uint32_t now = millis();
+      if (now - serialLastWsPushMs >= serialLogWsMinIntervalMs) {
+        serialLastWsPushMs = now;
+        wsSendKeyStr("SERLOG", slot);
+      }
+    }
+  }
+
+  static inline void serialLogPushLine(const String& line, bool sendWs = true) {
+    serialLogPushLine(line.c_str(), sendWs);
+  }
+
+  static void serialMirrorPrint(const char* text, bool appendNewline) {
+    if ((!text || !text[0]) && !appendNewline) return;
+    char buf[SERIAL_LOG_LINE_MAX + 1];
+    if (!text) text = "";
+    strncpy(buf, text, SERIAL_LOG_LINE_MAX);
+    buf[SERIAL_LOG_LINE_MAX] = '\0';
+    if (appendNewline) {
+      size_t n = strlen(buf);
+      while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+        buf[--n] = '\0';
+      }
+    }
+    serialLogPushLine(buf, true);
   }
 
   static void serialMirrorPrintf(const char* fmt, ...) {
@@ -1357,12 +1462,10 @@ unsigned long wifiConnectStartTime = 0;
     va_end(ap);
     if (n <= 0) return;
     size_t len = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
-    String s;
-    s.reserve(len + 2);
-    s += buf;
-    s.replace("\r", "");
-    if (s.endsWith("\n")) s.remove(s.length() - 1);
-    serialLogPushLine(s, true);
+    while (len && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+      buf[--len] = '\0';
+    }
+    serialLogPushLine(buf, true);
   }
 
   static String httpsGet(const String& url, int* statusOut = nullptr) {
@@ -2228,6 +2331,18 @@ unsigned long wifiConnectStartTime = 0;
     if (kb < (int32_t)TELEMETRY_FILE_MAX_KB_MIN) return TELEMETRY_FILE_MAX_KB_MIN;
     if (kb > (int32_t)TELEMETRY_FILE_MAX_KB_MAX) return TELEMETRY_FILE_MAX_KB_MAX;
     return (uint32_t)kb;
+  }
+
+  static uint32_t clampSerialLogRateMs(int32_t ms) {
+    if (ms < (int32_t)SERIAL_LOG_RATE_MS_MIN) return SERIAL_LOG_RATE_MS_MIN;
+    if (ms > (int32_t)SERIAL_LOG_RATE_MS_MAX) return SERIAL_LOG_RATE_MS_MAX;
+    return (uint32_t)ms;
+  }
+
+  static uint32_t clampSerialLogKeepLines(int32_t lines) {
+    if (lines < (int32_t)SERIAL_LOG_KEEP_LINES_MIN) return SERIAL_LOG_KEEP_LINES_MIN;
+    if (lines > (int32_t)SERIAL_LOG_KEEP_LINES_MAX) return SERIAL_LOG_KEEP_LINES_MAX;
+    return (uint32_t)lines;
   }
 
 
@@ -5073,7 +5188,7 @@ unsigned long wifiConnectStartTime = 0;
   // Root: {"t":"init","state":{...},"sliders":{...}}
   // Capacity calc: root obj + state + sliders + headroom
   StaticJsonDocument<
-    JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(44) + JSON_OBJECT_SIZE(6) + 300
+    JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(52) + JSON_OBJECT_SIZE(6) + 300
   > doc;
 
   doc["t"] = "init";
@@ -5098,6 +5213,8 @@ unsigned long wifiConnectStartTime = 0;
   st["ModelAxisY"]     = modelAxisY;
   st["ModelAxisZ"]     = modelAxisZ;
   st["TelemetryMaxKB"] = telemetryFileMaxKB;
+  st["SerialLogRateMs"] = serialLogWsMinIntervalMs;
+  st["SerialLogKeepLines"] = serialLogRetainLines;
   st["IndicatorsVisible"] = indicatorsVisible ? 1 : 0;
   st["IndicatorsX"]     = indicatorsPosX;
   st["IndicatorsY"]     = indicatorsPosY;
@@ -5412,6 +5529,17 @@ unsigned long wifiConnectStartTime = 0;
             telemetryFileMaxSizeBytes = (size_t)telemetryFileMaxKB * 1024;
             uiPrefs.putUInt("TelemetryMaxKB", telemetryFileMaxKB);
             wsSendKeyInt("TelemetryMaxKB", telemetryFileMaxKB);
+          }
+          else if (key == "SerialLogRateMs")  {
+            serialLogWsMinIntervalMs = clampSerialLogRateMs(valueInt);
+            uiPrefs.putUInt(PREF_SERIALLOG_RATE_MS, serialLogWsMinIntervalMs);
+            wsSendKeyInt("SerialLogRateMs", serialLogWsMinIntervalMs);
+          }
+          else if (key == "SerialLogKeepLines")  {
+            serialLogRetainLines = clampSerialLogKeepLines(valueInt);
+            uiPrefs.putUInt(PREF_SERIALLOG_KEEP_LINES, serialLogRetainLines);
+            clearSerialLogBuffer();
+            wsSendKeyInt("SerialLogKeepLines", serialLogRetainLines);
           }
 
         } // if (frame ok)
@@ -7047,10 +7175,11 @@ unsigned long wifiConnectStartTime = 0;
       auto* resp = new AsyncJsonResponse();
       JsonObject root = resp->getRoot().to<JsonObject>();
       JsonArray lines = root.createNestedArray("lines");
-      const size_t start = (serialLogHead + SERIAL_LOG_RING_SIZE - serialLogCount) % SERIAL_LOG_RING_SIZE;
+      const size_t cap = serialLogActiveCapacity();
+      const size_t start = (serialLogHead + cap - serialLogCount) % cap;
       for (size_t i = 0; i < serialLogCount; ++i) {
-        const size_t idx = (start + i) % SERIAL_LOG_RING_SIZE;
-        lines.add(serialLogRing[idx]);
+        const size_t idx = (start + i) % cap;
+        if (serialLogRing) lines.add(serialLogSlot(idx));
       }
       root["count"] = (int)serialLogCount;
       root["ok"] = true;
@@ -7499,6 +7628,8 @@ unsigned long wifiConnectStartTime = 0;
       root["ModelAxisY"]       = modelAxisY;
       root["ModelAxisZ"]       = modelAxisZ;
       root["TelemetryMaxKB"]   = telemetryFileMaxKB;
+      root["SerialLogRateMs"]  = serialLogWsMinIntervalMs;
+      root["SerialLogKeepLines"]  = serialLogRetainLines;
       root["IndicatorsVisible"] = (int)(indicatorsVisible ? 1 : 0);
       root["IndicatorsX"]      = indicatorsPosX;
       root["IndicatorsY"]      = indicatorsPosY;
@@ -10635,8 +10766,9 @@ unsigned long wifiConnectStartTime = 0;
 
   void setup() {
     initSdMutex();
+    initSerialLogStorage();
 
-    #ifdef DEBUG_SERIAL
+    #if DEBUG_SERIAL
       Serial.begin(115200);
       Serial.setDebugOutput(true);
       PRINT_HEAP("after_serial_begin");
@@ -10691,6 +10823,8 @@ unsigned long wifiConnectStartTime = 0;
     tlmEnabled      = uiPrefs.getBool("RecordTelemetry", false);
     sSndEnabled     = uiPrefs.getBool("SystemSounds", true);
     wsRebootOnDisconnect = loadWsRebootWatchdogPref();
+    serialLogWsMinIntervalMs = clampSerialLogRateMs((int32_t)uiPrefs.getUInt(PREF_SERIALLOG_RATE_MS, SERIAL_LOG_RATE_MS_DEFAULT));
+    serialLogRetainLines = clampSerialLogKeepLines((int32_t)uiPrefs.getUInt(PREF_SERIALLOG_KEEP_LINES, SERIAL_LOG_KEEP_LINES_DEFAULT));
     indicatorsVisible = uiPrefs.getBool(PREF_INDICATORS_VISIBLE, true);
     indicatorsPosX    = uiPrefs.getInt(PREF_INDICATORS_X, -1);
     indicatorsPosY    = uiPrefs.getInt(PREF_INDICATORS_Y, -1);
@@ -10800,7 +10934,7 @@ unsigned long wifiConnectStartTime = 0;
     deviceWasRunning = runningNow;
     pumpSystemSoundScheduler(now);
 
-    #ifdef DEBUG_SERIAL
+    #if DEBUG_SERIAL
       handleSerialCommands();
     #endif
 
