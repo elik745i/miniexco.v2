@@ -36,6 +36,24 @@ Key Features
 - Home Assistant discovery + MQTT telemetry (configurable)
 - OTA updates (ElegantOTA)
 
+Recent Additions (v2.1.01)
+--------------------------
+- Telemetry CSV logging reliability improvements:
+  - fixed append/rotation edge cases that could leave newly rotated files with only a single data row
+  - stronger append fallback and EOF seek handling to prevent accidental overwrite behavior
+  - improved file-target selection and rotation flow to keep logging continuous
+- SD Card File Manager recycle recovery fix:
+  - added missing frontend recover handler (`sdRecover`) wired to `/recover_sd`
+  - improved recover error surfacing and list refresh behavior
+- SD Card File Manager search UX:
+  - added toolbar search controls (search button + query input + clear button)
+  - case-insensitive partial-name matching for files and folders
+  - Enter-to-search and auto-reset to full list when query is cleared
+  - search now loads full paged folder contents before filtering in large directories
+- SD manager toolbar layout polish:
+  - stabilized single-line control layout across root and subfolders
+  - tightened spacing and responsive search sizing to avoid distortion
+
 Recent Additions (v2.0.98)
 --------------------------
 - Widget system refactor and UX pass:
@@ -122,6 +140,7 @@ Serial Commands (v2.0.98)
 
 Revision History (highlights)
 -----------------------------
+- v2.1.01: Telemetry CSV rotation/append fixes, SD recycle recover handler fix, SD file-manager search feature, and toolbar single-line layout stabilization.
 - v2.0.98: Widget framework/refactor, gravity/drag modes, View tab controls and previews, expandable panel behavior fixes, memory stability improvements.
 - v2.0.94: Media library listing stabilized for large SD collections; robust paging and UI timeout recovery.
 - v2.0.90: Camera streaming hardened (HTTPD sizing, pacing, merged chunks, early server bring-up).
