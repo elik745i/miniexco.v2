@@ -29,6 +29,8 @@ const memoryFrameState = {
   dragging: false,
   dragOffsetX: 0,
   dragOffsetY: 0,
+  dragScaleX: 1,
+  dragScaleY: 1,
   pendingSettle: false,
   pendingRoll: 1,
   longPressTimer: null,
@@ -46,6 +48,8 @@ const overlayWidgetStates = {
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
+    dragScaleX: 1,
+    dragScaleY: 1,
     pendingSettle: false,
     pendingRoll: 1,
     wsVisible: "ImuVisible",
@@ -64,6 +68,8 @@ const overlayWidgetStates = {
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
+    dragScaleX: 1,
+    dragScaleY: 1,
     pendingSettle: false,
     pendingRoll: 1,
     wsVisible: "MediaVisible",
@@ -82,6 +88,8 @@ const overlayWidgetStates = {
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
+    dragScaleX: 1,
+    dragScaleY: 1,
     pendingSettle: false,
     pendingRoll: 1,
     wsVisible: "PathVisible",
@@ -100,6 +108,8 @@ const overlayWidgetStates = {
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
+    dragScaleX: 1,
+    dragScaleY: 1,
     pendingSettle: false,
     pendingRoll: 1,
     wsVisible: "Model3DVisible",
@@ -118,6 +128,8 @@ const overlayWidgetStates = {
     dragging: false,
     dragOffsetX: 0,
     dragOffsetY: 0,
+    dragScaleX: 1,
+    dragScaleY: 1,
     pendingSettle: false,
     pendingRoll: 1,
     wsVisible: "SerialVisible",
@@ -230,12 +242,68 @@ function clampWidgetScale(value) {
   return Math.max(0.6, Math.min(1.8, n));
 }
 
+function parseElementTransformScale(computed) {
+  let sx = 1;
+  let sy = 1;
+  const tr = computed ? (computed.transform || "none") : "none";
+  if (!tr || tr === "none") return { sx, sy };
+
+  const m2d = tr.match(/^matrix\(([^)]+)\)$/);
+  const m3d = tr.match(/^matrix3d\(([^)]+)\)$/);
+  if (m2d) {
+    const p = m2d[1].split(",").map((v) => Number(v.trim()));
+    if (p.length >= 4 && p.every((n) => Number.isFinite(n))) {
+      sx = Math.hypot(p[0], p[1]) || 1;
+      sy = Math.hypot(p[2], p[3]) || 1;
+    }
+  } else if (m3d) {
+    const p = m3d[1].split(",").map((v) => Number(v.trim()));
+    if (p.length === 16 && p.every((n) => Number.isFinite(n))) {
+      sx = Math.hypot(p[0], p[1], p[2]) || 1;
+      sy = Math.hypot(p[4], p[5], p[6]) || 1;
+    }
+  }
+  return { sx, sy };
+}
+
+function getElementRenderScale(el, rect, computed) {
+  if (!el) return { x: 1, y: 1 };
+  const r = rect || el.getBoundingClientRect();
+  const c = computed || (window.getComputedStyle ? window.getComputedStyle(el) : null);
+  const baseW = el.offsetWidth || el.clientWidth || 0;
+  const baseH = el.offsetHeight || el.clientHeight || 0;
+
+  let x = baseW > 0 ? ((r && Number.isFinite(r.width) ? r.width : baseW) / baseW) : 1;
+  let y = baseH > 0 ? ((r && Number.isFinite(r.height) ? r.height : baseH) / baseH) : 1;
+
+  if (!Number.isFinite(x) || x <= 0 || !Number.isFinite(y) || y <= 0) {
+    const zoomVal = c ? parseFloat(c.zoom || "1") : 1;
+    const zoom = Number.isFinite(zoomVal) && zoomVal > 0 ? zoomVal : 1;
+    const t = parseElementTransformScale(c);
+    x = zoom * t.sx;
+    y = zoom * t.sy;
+  }
+
+  return {
+    x: Number.isFinite(x) && x > 0 ? x : 1,
+    y: Number.isFinite(y) && y > 0 ? y : 1
+  };
+}
+
 function getElementRenderSize(el) {
   if (!el) return { w: 1, h: 1 };
   const rect = el.getBoundingClientRect();
+  const computed = window.getComputedStyle ? window.getComputedStyle(el) : null;
+  const rectW = Math.max(1, Math.round(rect.width || 0));
+  const rectH = Math.max(1, Math.round(rect.height || 0));
+  const baseW = Math.max(1, Math.round(el.offsetWidth || el.clientWidth || 0));
+  const baseH = Math.max(1, Math.round(el.offsetHeight || el.clientHeight || 0));
+  const scale = getElementRenderScale(el, rect, computed);
+  const scaledW = Math.max(1, Math.round(baseW * scale.x));
+  const scaledH = Math.max(1, Math.round(baseH * scale.y));
   return {
-    w: Math.max(1, Math.round(rect.width || el.offsetWidth || 1)),
-    h: Math.max(1, Math.round(rect.height || el.offsetHeight || 1))
+    w: rectW || scaledW || 1,
+    h: rectH || scaledH || 1
   };
 }
 
@@ -738,14 +806,11 @@ function applyOverlayWidgetPosition(type, animated) {
     st.y = def.y;
   }
   const stored = clampOverlayWidgetStoredPos(type, st.x, st.y);
-  st.x = stored.x;
-  st.y = stored.y;
-  const pos = resolveOverlayWidgetRenderPos(type, st.x, st.y);
+  const pos = resolveOverlayWidgetRenderPos(type, stored.x, stored.y);
   if (animated) el.style.transition = "left 220ms ease, top 220ms ease, opacity 180ms ease";
   el.style.right = "auto";
   el.style.bottom = "auto";
-  el.style.left = pos.x + "px";
-  el.style.top = Math.max(MEMORY_FRAME_MARGIN, pos.y - getMemoryExpansionLiftOffset(type)) + "px";
+  applyWidgetRenderPos(el, getMemoryFrameHost(), pos.x, Math.max(MEMORY_FRAME_MARGIN, pos.y - getMemoryExpansionLiftOffset(type)));
   if (animated) setTimeout(() => { el.style.transition = ""; }, 240);
 }
 
@@ -1066,9 +1131,7 @@ function applyUnifiedWidgetLayout(anchorType, animated, commitStored, opts) {
       memoryFrameState.y = def.y;
     }
     const stored = clampMemoryFrameStoredPos(memoryFrameState.x, memoryFrameState.y);
-    memoryFrameState.x = stored.x;
-    memoryFrameState.y = stored.y;
-    const desired = resolveMemoryFrameRenderPos(memoryFrameState.x, memoryFrameState.y);
+    const desired = resolveMemoryFrameRenderPos(stored.x, stored.y);
     items.push({
       type: "indicators",
       el: memoryWrap,
@@ -1091,9 +1154,7 @@ function applyUnifiedWidgetLayout(anchorType, animated, commitStored, opts) {
       st.y = def.y;
     }
     const stored = clampOverlayWidgetStoredPos(type, st.x, st.y);
-    st.x = stored.x;
-    st.y = stored.y;
-    const desired = resolveOverlayWidgetRenderPos(type, st.x, st.y);
+    const desired = resolveOverlayWidgetRenderPos(type, stored.x, stored.y);
     items.push({
       type,
       el,
@@ -1167,8 +1228,7 @@ function applyUnifiedWidgetLayout(anchorType, animated, commitStored, opts) {
     if (animated) item.el.style.transition = "left 220ms ease, top 220ms ease, opacity 180ms ease";
     item.el.style.right = "auto";
     item.el.style.bottom = "auto";
-    item.el.style.left = pos.x + "px";
-    item.el.style.top = Math.max(MEMORY_FRAME_MARGIN, pos.y - getMemoryExpansionLiftOffset(item.type)) + "px";
+    applyWidgetRenderPos(item.el, host, pos.x, Math.max(MEMORY_FRAME_MARGIN, pos.y - getMemoryExpansionLiftOffset(item.type)));
     if (animated) setTimeout(() => { item.el.style.transition = ""; }, 240);
 
     if (!commitStored) continue;
@@ -1194,6 +1254,27 @@ function persistAllWidgetStates(sendToDevice) {
 function applyPanelAvoidanceLayout(animated) {
   applyUnifiedWidgetLayout(null, animated, false, { panelOnly: true });
   if (memoryUiState.open) applyMemoryExpansionLift();
+}
+
+function getElementStyleOffsetFromRender(el, hostRect) {
+  if (!el || !hostRect) return { x: 0, y: 0 };
+  const r = el.getBoundingClientRect();
+  const styleLeft = Number.parseFloat(el.style.left);
+  const styleTop = Number.parseFloat(el.style.top);
+  const renderX = r.left - hostRect.left;
+  const renderY = r.top - hostRect.top;
+  return {
+    x: Number.isFinite(styleLeft) ? (renderX - styleLeft) : 0,
+    y: Number.isFinite(styleTop) ? (renderY - styleTop) : 0
+  };
+}
+
+function applyWidgetRenderPos(el, host, renderX, renderY) {
+  if (!el || !host) return;
+  const hostRect = host.getBoundingClientRect();
+  const off = getElementStyleOffsetFromRender(el, hostRect);
+  el.style.left = Math.round(renderX - off.x) + "px";
+  el.style.top = Math.round(renderY - off.y) + "px";
 }
 
 function getRenderedWidgetPos(el, hostRect, minX) {
@@ -1419,8 +1500,7 @@ function startWidgetMatterSimulation(kind, rollDir) {
     st.x = sx;
     st.y = sy;
     st.pendingSettle = false;
-    el.style.left = sx + "px";
-    el.style.top = sy + "px";
+    applyWidgetRenderPos(el, host, sx, sy);
     el.style.right = "auto";
     el.style.bottom = "auto";
     el.style.transform = "";
@@ -1439,8 +1519,7 @@ function startWidgetMatterSimulation(kind, rollDir) {
 
     const drawX = Math.max(minX, Math.min(maxX, body.position.x - w * 0.5));
     const drawY = Math.max(MEMORY_FRAME_MARGIN, Math.min(maxY, body.position.y - h * 0.5));
-    el.style.left = Math.round(drawX) + "px";
-    el.style.top = Math.round(drawY) + "px";
+    applyWidgetRenderPos(el, host, Math.round(drawX), Math.round(drawY));
     el.style.transform = `rotate(${(body.angle * 180 / Math.PI).toFixed(2)}deg)`;
 
     const v = body.velocity;
@@ -1551,8 +1630,7 @@ function startWidgetFallSimulation(kind, rollDir) {
   const tiltLift = 2 + 8 * instability;
 
   const applyVisual = () => {
-    el.style.left = Math.round(x) + "px";
-    el.style.top = Math.round(y) + "px";
+    applyWidgetRenderPos(el, host, Math.round(x), Math.round(y));
     el.style.transform = `rotate(${angle.toFixed(2)}deg)`;
   };
 
@@ -1561,8 +1639,7 @@ function startWidgetFallSimulation(kind, rollDir) {
     st.x = Math.round(x);
     st.y = Math.round(y);
     st.pendingSettle = false;
-    el.style.left = st.x + "px";
-    el.style.top = st.y + "px";
+    applyWidgetRenderPos(el, host, st.x, st.y);
     el.style.right = "auto";
     el.style.bottom = "auto";
     el.style.transform = "";
@@ -1762,13 +1839,10 @@ function applyMemoryFramePosition(animated) {
     memoryFrameState.y = def.y;
   }
   const stored = clampMemoryFrameStoredPos(memoryFrameState.x, memoryFrameState.y);
-  memoryFrameState.x = stored.x;
-  memoryFrameState.y = stored.y;
-  const next = resolveMemoryFrameRenderPos(memoryFrameState.x, memoryFrameState.y);
+  const next = resolveMemoryFrameRenderPos(stored.x, stored.y);
   if (animated) wrap.style.transition = "left 220ms ease, top 220ms ease, opacity 180ms ease";
   wrap.style.right = "auto";
-  wrap.style.left = next.x + "px";
-  wrap.style.top = next.y + "px";
+  applyWidgetRenderPos(wrap, getMemoryFrameHost(), next.x, next.y);
   if (animated) setTimeout(() => { wrap.style.transition = ""; }, 240);
 }
 
@@ -2018,17 +2092,23 @@ function initOverlayWidgetFrame(type) {
   const startDrag = (clientX, clientY) => {
     if (!st.dragArmed || !st.visible) return;
     const rect = el.getBoundingClientRect();
+    const scale = getElementRenderScale(el, rect);
     st.dragging = true;
     el.classList.add("widget--dragging");
-    st.dragOffsetX = clientX - rect.left;
-    st.dragOffsetY = clientY - rect.top;
+    st.dragScaleX = scale.x;
+    st.dragScaleY = scale.y;
+    st.dragOffsetX = (clientX - rect.left) / scale.x;
+    st.dragOffsetY = (clientY - rect.top) / scale.y;
   };
 
   const moveDrag = (clientX, clientY) => {
     if (!st.dragging) return;
     const hostRect = host.getBoundingClientRect();
-    const desiredX = clientX - hostRect.left - st.dragOffsetX;
-    const desiredY = clientY - hostRect.top - st.dragOffsetY;
+    const scale = getElementRenderScale(el);
+    const scaleX = (Number.isFinite(st.dragScaleX) && st.dragScaleX > 0) ? st.dragScaleX : scale.x;
+    const scaleY = (Number.isFinite(st.dragScaleY) && st.dragScaleY > 0) ? st.dragScaleY : scale.y;
+    const desiredX = clientX - hostRect.left - (st.dragOffsetX * scaleX);
+    const desiredY = clientY - hostRect.top - (st.dragOffsetY * scaleY);
     const safe = canPlaceAnchorWithoutOverlap(type, desiredX, desiredY);
     if (!safe) return;
     st.x = safe.x;
@@ -2044,6 +2124,8 @@ function initOverlayWidgetFrame(type) {
     if (!st.dragging) return;
     const useGravity = !!st.dragUseGravity;
     st.dragging = false;
+    st.dragScaleX = 1;
+    st.dragScaleY = 1;
     disarmOverlayWidgetDrag(type);
     if (useGravity && !st.pendingSettle && gravityEffectEnabled) {
       const gravityPending = shouldRunGravitySettle(type, st.x, st.y);
@@ -2141,17 +2223,23 @@ function initMemoryFrameInteractions() {
   const startDrag = (clientX, clientY) => {
     if (!memoryFrameState.dragArmed || !memoryFrameState.visible) return;
     const rect = wrap.getBoundingClientRect();
+    const scale = getElementRenderScale(wrap, rect);
     memoryFrameState.dragging = true;
     wrap.classList.add("memory-meters--dragging");
-    memoryFrameState.dragOffsetX = clientX - rect.left;
-    memoryFrameState.dragOffsetY = clientY - rect.top;
+    memoryFrameState.dragScaleX = scale.x;
+    memoryFrameState.dragScaleY = scale.y;
+    memoryFrameState.dragOffsetX = (clientX - rect.left) / scale.x;
+    memoryFrameState.dragOffsetY = (clientY - rect.top) / scale.y;
   };
 
   const moveDrag = (clientX, clientY) => {
     if (!memoryFrameState.dragging) return;
     const hostRect = host.getBoundingClientRect();
-    const desiredX = clientX - hostRect.left - memoryFrameState.dragOffsetX;
-    const desiredY = clientY - hostRect.top - memoryFrameState.dragOffsetY;
+    const scale = getElementRenderScale(wrap);
+    const scaleX = (Number.isFinite(memoryFrameState.dragScaleX) && memoryFrameState.dragScaleX > 0) ? memoryFrameState.dragScaleX : scale.x;
+    const scaleY = (Number.isFinite(memoryFrameState.dragScaleY) && memoryFrameState.dragScaleY > 0) ? memoryFrameState.dragScaleY : scale.y;
+    const desiredX = clientX - hostRect.left - (memoryFrameState.dragOffsetX * scaleX);
+    const desiredY = clientY - hostRect.top - (memoryFrameState.dragOffsetY * scaleY);
     const safe = canPlaceAnchorWithoutOverlap("indicators", desiredX, desiredY);
     if (!safe) return;
     memoryFrameState.x = safe.x;
@@ -2167,6 +2255,8 @@ function initMemoryFrameInteractions() {
     if (!memoryFrameState.dragging) return;
     const useGravity = !!memoryFrameState.dragUseGravity;
     memoryFrameState.dragging = false;
+    memoryFrameState.dragScaleX = 1;
+    memoryFrameState.dragScaleY = 1;
     disarmMemoryDragMode();
     if (useGravity && !memoryFrameState.pendingSettle && gravityEffectEnabled) {
       const gravityPending = shouldRunGravitySettle("indicators", memoryFrameState.x, memoryFrameState.y);
