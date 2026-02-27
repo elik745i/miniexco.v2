@@ -4,6 +4,8 @@ MiniExco Robot Firmware
 Firmware for the MiniExco rover running on ESP32-S3-SPK v1.0 (8 MB PSRAM / 16 MB flash). It drives camera, audio, SD storage, LEDs, IMU, and web UI for autonomous robotics and media playback.
 
 ![MiniExco rover](docs/images/mini-exco-youtube.jpg)
+![MiniExco rover view 2](docs/images/mini-exco-0023.jpg)
+![MiniExco rover view 3](docs/images/mini-exco-0019.jpg)
 
 Project Lineage
 ---------------
