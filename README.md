@@ -3,6 +3,8 @@ MiniExco Robot Firmware
 
 Firmware for the MiniExco rover running on ESP32-S3-SPK v1.0 (8 MB PSRAM / 16 MB flash). It drives camera, audio, SD storage, LEDs, IMU, and web UI for autonomous robotics and media playback.
 
+![MiniExco rover](docs/images/mini-exco-youtube.jpg)
+
 Cooling Requirement
 -------------------
 - The ESP32-S3 runs hot under Wi-Fi + camera + SD + audio load. Install **both** a metal heatsink on the ESP32-S3 and a low-profile 25 mm 5 V fan before long runs.
