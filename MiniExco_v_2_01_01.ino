@@ -852,7 +852,8 @@ struct MQTTConfig;
   static bool hadAnyClientSinceBoot = false;          // becomes true after first WS connect
 
   // Tunables
-  static const uint32_t WS_REBOOT_TIMEOUT_MS = 5000;  // 5 seconds with no WS clients
+  // Keep this long enough to avoid reboot loops during unattended operation.
+  static const uint32_t WS_REBOOT_TIMEOUT_MS = 300000;  // 5 minutes with no WS clients
   static const uint32_t WS_REBOOT_GRACE_MS   = 30000; // 30s after boot, don't reboot
 
   // If you already have these, keep them. Otherwise remove the 'extern' lines.
@@ -1845,25 +1846,31 @@ unsigned long wifiConnectStartTime = 0;
   static bool sendMaybeGz(AsyncWebServerRequest* req, const String& path) {
     String gz = path + F(".gz");
 
-    if (SD.exists(gz)) {
-      File f = SD.open(gz, FILE_READ);
-      if (!f) return false;
+    if (true) {
+      SdLock lk;
+      if (SD.exists(gz)) {
+        File f = SD.open(gz, FILE_READ);
+        if (!f) return false;
 
-      AsyncWebServerResponse* res = req->beginResponse(f, path, mimeOf(path));
-      res->addHeader(F("Content-Encoding"), F("gzip"));
-      res->addHeader(F("Cache-Control"), F("no-store"));
-      req->send(res);
-      return true;
+        AsyncWebServerResponse* res = req->beginResponse(f, path, mimeOf(path));
+        res->addHeader(F("Content-Encoding"), F("gzip"));
+        res->addHeader(F("Cache-Control"), F("no-store"));
+        req->send(res);
+        return true;
+      }
     }
 
-    if (SD.exists(path)) {
-      File f = SD.open(path, FILE_READ);
-      if (!f) return false;
+    if (true) {
+      SdLock lk;
+      if (SD.exists(path)) {
+        File f = SD.open(path, FILE_READ);
+        if (!f) return false;
 
-      AsyncWebServerResponse* res = req->beginResponse(f, path, mimeOf(path));
-      res->addHeader(F("Cache-Control"), F("no-store"));
-      req->send(res);
-      return true;
+        AsyncWebServerResponse* res = req->beginResponse(f, path, mimeOf(path));
+        res->addHeader(F("Cache-Control"), F("no-store"));
+        req->send(res);
+        return true;
+      }
     }
 
     return false;
@@ -3195,7 +3202,8 @@ unsigned long wifiConnectStartTime = 0;
     // --- Fallback: older core signature supports max_files as 5th arg ---
     // SD.begin(cs, spi, freq, mountpoint, max_files)
     {
-      ok = SD.begin(gpioConfig.sdCs, SPI, 40000000U, "/sd", 12);   // lowered to reduce baseline heap
+      // 20 MHz is more tolerant for long wires/noisy loads than 40 MHz and reduces SD corruption risk.
+      ok = SD.begin(gpioConfig.sdCs, SPI, 20000000U, "/sd", 12);
     }
     #endif
 
@@ -11071,10 +11079,15 @@ unsigned long wifiConnectStartTime = 0;
 
         if (wsRebootOnDisconnect && now >= WS_REBOOT_GRACE_MS) {
           if (hadAnyClientSinceBoot && wsActiveClients == 0) {
+            // Don't reboot while SD-heavy background tasks are active.
+            if (tlmEnabled || videoRecording || videoTaskActive) {
+              // keep waiting until workload is idle
+            } else {
             uint32_t idleSince = (lastWsDisconnectMs > lastWebActivityMs)
                                   ? lastWsDisconnectMs : lastWebActivityMs;
             if (now - idleSince >= WS_REBOOT_TIMEOUT_MS) {
               resetESP();
+            }
             }
           }
         }
