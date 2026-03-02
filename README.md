@@ -30,6 +30,19 @@ Stability Notes (Heap / Watchdog)
   - **Left expandable menu -> Settings -> Config -> WS Disconnect Reboot Watchdog**
 - Recommendation: keep this watchdog enabled for long unattended sessions.
 
+microSD Reliability Notes
+-------------------------
+- Under long unattended runtime (continuous telemetry/media/video writes), low-end microSD cards may become unstable or fail.
+- Typical failure signs:
+  - card is still readable, but write operations fail intermittently
+  - filesystem checks (`chkdsk`/fsck) hang or never complete
+  - random missing/corrupted files after resets or power events
+- Recommendation:
+  - use **high-endurance** microSD cards only (for example: SanDisk Max Endurance / Samsung PRO Endurance)
+  - buy from trusted sources to avoid counterfeit cards
+  - avoid abrupt power loss while SD writes are active
+  - replace cards at first sign of write instability
+
 Hardware
 --------
 - ESP32-S3-SPK v1.0 with PSRAM
